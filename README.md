@@ -90,8 +90,8 @@ All knobs live at the top of `dictate.py`:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `HOTKEY` | `"<ctrl>+<shift>+m"` | Initial hotkey (overridable from the tray menu — see "Changing the hotkey"). [pynput GlobalHotKeys syntax](https://pynput.readthedocs.io/en/latest/keyboard.html#global-hotkeys). Examples: `"<f9>"`, `"<ctrl>+<shift>+d"` |
-| `HOTKEY_PRESETS` | `["<ctrl>+<alt>+<space>", "<ctrl>+<shift>+m", "<ctrl>+<shift>+d", "<f9>", "<f12>"]` | Choices shown in the tray "Hotkey" submenu. |
+| `HOTKEY` | `"<ctrl>+<alt>+<space>"` | Initial hotkey (overridable from the tray menu — see "Changing the hotkey"). [pynput GlobalHotKeys syntax](https://pynput.readthedocs.io/en/latest/keyboard.html#global-hotkeys). Examples: `"<f9>"`, `"<ctrl>+<shift>+d"` |
+| `HOTKEY_PRESETS` | tuples of `(spec, warning)` — see source | Choices shown in the tray "Hotkey" submenu. Combos with a non-`None` warning render with a ⚠ marker (e.g. `Ctrl+Shift+M ⚠ Teams/Outlook mute`). |
 | `MODEL_SIZE` | `"medium.en"` | `tiny.en`, `base.en`, `small.en`, `medium.en`, `large-v3` |
 | `COMPUTE_TYPE` | `"int8"` | `int8` is fastest on CPU; try `int8_float32` if accuracy suffers |
 | `MIC_DEVICE` | `None` | `None` = default; or an int index / name substring. List devices with `python -m sounddevice` |

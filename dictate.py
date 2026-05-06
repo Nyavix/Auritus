@@ -17,16 +17,22 @@ Run with `pythonw dictate.py` to suppress the console window.
 #   "<ctrl>+<shift>+d"
 #   "<f9>"
 # After first run, the hotkey is editable from the tray menu and persisted
-# in config.json. This constant is only the initial value.
-HOTKEY = "<ctrl>+<shift>+m"
+# in config.json. This constant is only the initial value used the very first
+# launch (before config.json exists).
+HOTKEY = "<ctrl>+<alt>+<space>"
 
-# Hotkey presets shown in the tray "Hotkey" submenu. Order is preserved.
+# Hotkey presets shown in the tray "Hotkey" submenu. Each entry is
+# (pynput_spec, warning) -- warning is None for combos with no known conflict,
+# or a short string shown next to the menu label.
 HOTKEY_PRESETS = [
-    "<ctrl>+<alt>+<space>",
-    "<ctrl>+<shift>+m",
-    "<ctrl>+<shift>+d",
-    "<f9>",
-    "<f12>",
+    ("<ctrl>+<alt>+<space>",      None),
+    ("<f9>",                      None),
+    ("<f12>",                     "browser DevTools"),
+    ("<ctrl>+<alt>+<shift>+d",    None),
+    ("<pause>",                   None),
+    ("<scroll_lock>",             None),
+    ("<ctrl>+<shift>+m",          "Teams/Outlook mute"),
+    ("<ctrl>+<shift>+d",          None),
 ]
 
 # faster-whisper model size. Options: tiny.en, base.en, small.en, medium.en,
@@ -472,6 +478,285 @@ class RecordingOverlay:
 
 
 # ---------------------------------------------------------------------
+# Hotkey capture dialog
+# ---------------------------------------------------------------------
+
+class HotkeyCaptureDialog:
+    """Modal Toplevel that records a key chord and returns a pynput hotkey
+    string. Runs on its own thread with its own tk.Tk root (multi-root
+    pattern matches RecordingOverlay)."""
+
+    MODIFIER_KEYSYMS = {
+        "Control_L": "ctrl",  "Control_R": "ctrl",
+        "Shift_L":   "shift", "Shift_R":   "shift",
+        "Alt_L":     "alt",   "Alt_R":     "alt",
+        "Meta_L":    "alt",   "Meta_R":    "alt",
+        "Super_L":   "cmd",   "Super_R":   "cmd",
+        "Win_L":     "cmd",   "Win_R":     "cmd",
+    }
+
+    SPECIAL_KEYS = {
+        "space": "<space>", "Tab": "<tab>", "Return": "<enter>",
+        "BackSpace": "<backspace>", "Delete": "<delete>", "Insert": "<insert>",
+        "Home": "<home>", "End": "<end>",
+        "Prior": "<page_up>", "Next": "<page_down>",
+        "Up": "<up>", "Down": "<down>", "Left": "<left>", "Right": "<right>",
+        "Pause": "<pause>", "Scroll_Lock": "<scroll_lock>",
+        "Num_Lock": "<num_lock>", "Caps_Lock": "<caps_lock>",
+        "Print": "<print_screen>",
+    }
+
+    PUNCTUATION = {
+        "minus": "-", "plus": "+", "equal": "=",
+        "comma": ",", "period": ".", "slash": "/", "backslash": "\\",
+        "semicolon": ";", "apostrophe": "'", "grave": "`",
+        "bracketleft": "[", "bracketright": "]",
+    }
+
+    BG = "#1a1a1a"
+    PANEL = "#0f0f0f"
+    FG = "#e0e0e0"
+    DIM = "#888888"
+    ACCENT = "#5cc8ff"
+    OK = "#7be38a"
+    ERR = "#ff6868"
+    BTN_BG = "#2a2a2a"
+    BTN_HOVER = "#3a3a3a"
+    PRIMARY = "#2c5282"
+    PRIMARY_HOVER = "#3b6ba5"
+
+    def __init__(self, app: "DictateApp"):
+        self.app = app
+        self._held_mods: set[str] = set()
+        self._held_main: str | None = None
+        self._locked: tuple[frozenset, str] | None = None
+        self._result: str | None = None
+        self._root: tk.Tk | None = None
+        self._preview: tk.Label | None = None
+        self._status: tk.Label | None = None
+        self._ok_btn: tk.Button | None = None
+
+    def run(self) -> None:
+        root = tk.Tk()
+        root.withdraw()
+        root.title(f"{APP_NAME} — Set hotkey")
+        root.configure(bg=self.BG)
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+        self._root = root
+
+        outer = tk.Frame(root, bg=self.BG, padx=26, pady=22)
+        outer.pack()
+
+        tk.Label(
+            outer, text="Press the key combination",
+            bg=self.BG, fg=self.FG, font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w")
+
+        tk.Label(
+            outer,
+            text="Hold modifiers (Ctrl, Shift, Alt, Win) and press a key.\n"
+                 "Esc to cancel  ·  Clear to reset  ·  OK to save.",
+            bg=self.BG, fg=self.DIM, font=("Segoe UI", 9), justify="left",
+        ).pack(anchor="w", pady=(4, 14))
+
+        self._preview = tk.Label(
+            outer, text="(waiting for keys…)",
+            bg=self.PANEL, fg=self.DIM, font=("Segoe UI", 14, "bold"),
+            padx=16, pady=12, anchor="center", width=32,
+        )
+        self._preview.pack(fill="x")
+
+        self._status = tk.Label(
+            outer, text="Tip: triple-modifier chords (Ctrl+Alt+Shift+key) rarely conflict.",
+            bg=self.BG, fg=self.DIM, font=("Segoe UI", 9), justify="left",
+        )
+        self._status.pack(anchor="w", pady=(10, 16))
+
+        btns = tk.Frame(outer, bg=self.BG)
+        btns.pack(fill="x")
+
+        self._make_button(btns, "Clear", self._on_clear).pack(side="left")
+        self._make_button(btns, "Cancel", self._on_cancel).pack(side="right")
+        self._ok_btn = self._make_button(
+            btns, "OK", self._on_ok, primary=True
+        )
+        self._ok_btn.pack(side="right", padx=(0, 8))
+        self._ok_btn.configure(state="disabled")
+
+        root.bind_all("<KeyPress>", self._on_key_press)
+        root.bind_all("<KeyRelease>", self._on_key_release)
+        root.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        root.update_idletasks()
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        ww = root.winfo_reqwidth()
+        wh = root.winfo_reqheight()
+        x = (sw - ww) // 2
+        y = (sh - wh) // 3
+        root.geometry(f"+{x}+{y}")
+        root.deiconify()
+        root.focus_force()
+        try:
+            root.grab_set()
+        except Exception:
+            pass
+
+        root.mainloop()
+
+        if self._result:
+            self.app.set_hotkey(self._result)
+
+    def _make_button(self, parent: tk.Frame, text: str, command, primary: bool = False) -> tk.Button:
+        bg = self.PRIMARY if primary else self.BTN_BG
+        hover = self.PRIMARY_HOVER if primary else self.BTN_HOVER
+        fg = "#ffffff" if primary else self.FG
+        btn = tk.Button(
+            parent, text=text, command=command,
+            bg=bg, fg=fg, activebackground=hover, activeforeground=fg,
+            relief="flat", borderwidth=0, padx=18, pady=7,
+            font=("Segoe UI", 10, "bold" if primary else "normal"),
+            cursor="hand2",
+        )
+        btn.bind("<Enter>", lambda _e, b=btn, c=hover: b.configure(bg=c))
+        btn.bind("<Leave>", lambda _e, b=btn, c=bg: b.configure(bg=c))
+        return btn
+
+    # -- key handling -------------------------------------------------
+
+    def _on_key_press(self, event):
+        sym = event.keysym
+        if sym == "Escape" and not self._held_mods and not self._held_main and self._locked is None:
+            self._on_cancel()
+            return "break"
+        if sym in self.MODIFIER_KEYSYMS:
+            self._held_mods.add(self.MODIFIER_KEYSYMS[sym])
+            self._update_preview()
+            return "break"
+        main = self._keysym_to_pynput(sym)
+        if main is None:
+            self._set_status(f"Unsupported key: {sym}", error=True)
+            return "break"
+        self._held_main = main
+        self._locked = (frozenset(self._held_mods), main)
+        self._set_status("Press OK to save, Clear to retry.")
+        self._update_preview()
+        return "break"
+
+    def _on_key_release(self, event):
+        sym = event.keysym
+        if sym in self.MODIFIER_KEYSYMS:
+            self._held_mods.discard(self.MODIFIER_KEYSYMS[sym])
+        else:
+            main = self._keysym_to_pynput(sym)
+            if main and self._held_main == main:
+                self._held_main = None
+        self._update_preview()
+        return "break"
+
+    # -- buttons ------------------------------------------------------
+
+    def _on_clear(self):
+        self._held_mods.clear()
+        self._held_main = None
+        self._locked = None
+        self._set_status("")
+        self._update_preview()
+
+    def _on_cancel(self):
+        self._result = None
+        try:
+            self._root.grab_release()
+        except Exception:
+            pass
+        self._root.destroy()
+
+    def _on_ok(self):
+        spec = self._build_spec()
+        if not spec:
+            self._set_status("Need at least one non-modifier key.", error=True)
+            return
+        if not is_valid_hotkey(spec):
+            self._set_status(f"Invalid hotkey: {spec}", error=True)
+            return
+        self._result = spec
+        try:
+            self._root.grab_release()
+        except Exception:
+            pass
+        self._root.destroy()
+
+    # -- preview ------------------------------------------------------
+
+    def _build_spec(self) -> str | None:
+        if not self._locked:
+            return None
+        mods, main = self._locked
+        order = ["ctrl", "alt", "shift", "cmd"]
+        parts = [f"<{m}>" for m in order if m in mods]
+        parts.append(main)
+        return "+".join(parts)
+
+    def _update_preview(self):
+        if self._preview is None or self._ok_btn is None:
+            return
+        if self._locked:
+            spec = self._build_spec() or ""
+            self._preview.configure(text=self._pretty(spec), fg=self.OK)
+            self._ok_btn.configure(state="normal")
+            return
+        if self._held_mods or self._held_main:
+            order = ["ctrl", "alt", "shift", "cmd"]
+            parts = [f"<{m}>" for m in order if m in self._held_mods]
+            if self._held_main:
+                parts.append(self._held_main)
+            preview = "+".join(parts) if parts else ""
+            self._preview.configure(
+                text=self._pretty(preview) if preview else "(waiting for keys…)",
+                fg=self.ACCENT,
+            )
+        else:
+            self._preview.configure(text="(waiting for keys…)", fg=self.DIM)
+        self._ok_btn.configure(state="disabled")
+
+    def _set_status(self, text: str, error: bool = False):
+        if self._status is None:
+            return
+        self._status.configure(text=text, fg=self.ERR if error else self.DIM)
+
+    @staticmethod
+    def _pretty(spec: str) -> str:
+        out = []
+        for part in spec.split("+"):
+            p = part.strip()
+            if p.startswith("<") and p.endswith(">"):
+                inner = p[1:-1]
+                out.append(inner.replace("_", " ").title())
+            else:
+                out.append(p.upper() if len(p) == 1 else p)
+        return "  +  ".join(out)
+
+    @classmethod
+    def _keysym_to_pynput(cls, sym: str) -> str | None:
+        if sym in cls.SPECIAL_KEYS:
+            return cls.SPECIAL_KEYS[sym]
+        if len(sym) >= 2 and sym[0] in "Ff" and sym[1:].isdigit():
+            n = int(sym[1:])
+            if 1 <= n <= 20:
+                return f"<f{n}>"
+        if len(sym) == 1:
+            if sym.isalpha():
+                return sym.lower()
+            if sym.isdigit():
+                return sym
+            if not sym.isspace():
+                return sym
+        if sym in cls.PUNCTUATION:
+            return cls.PUNCTUATION[sym]
+        return None
+
+
+# ---------------------------------------------------------------------
 # Recorder
 # ---------------------------------------------------------------------
 
@@ -680,26 +965,10 @@ class DictateApp:
         notify(APP_NAME, f"Hotkey: {spec}")
 
     def _prompt_custom_hotkey(self) -> None:
-        """Open a small modal asking for a pynput hotkey spec. Runs on its own thread."""
+        """Open the live key-capture dialog on a dedicated thread (own tk.Tk root)."""
         def _worker():
             try:
-                from tkinter import simpledialog
-                root = tk.Tk()
-                root.withdraw()
-                root.attributes("-topmost", True)
-                spec = simpledialog.askstring(
-                    f"{APP_NAME} - Set hotkey",
-                    "Enter hotkey using pynput syntax:\n"
-                    "  <ctrl>+<alt>+<space>\n"
-                    "  <ctrl>+<shift>+m\n"
-                    "  <f9>\n"
-                    "  <cmd>+<shift>+d",
-                    initialvalue=self.current_hotkey,
-                    parent=root,
-                )
-                root.destroy()
-                if spec:
-                    self.set_hotkey(spec)
+                HotkeyCaptureDialog(self).run()
             except Exception as e:
                 log(f"Hotkey prompt failed: {e}\n{traceback.format_exc()}")
                 notify_error(APP_NAME, f"Hotkey prompt failed: {e}")
@@ -857,10 +1126,12 @@ class DictateApp:
         return pystray.Menu(*items)
 
     def _hotkey_submenu(self) -> pystray.Menu:
+        preset_specs = {spec for spec, _ in HOTKEY_PRESETS}
         items = []
-        for spec in HOTKEY_PRESETS:
+        for spec, warn in HOTKEY_PRESETS:
+            label = spec if not warn else f"{spec}  ⚠  {warn}"
             items.append(pystray.MenuItem(
-                spec,
+                label,
                 (lambda s: lambda icon, item: self.set_hotkey(s))(spec),
                 checked=(lambda s: lambda item: self.current_hotkey == s)(spec),
                 radio=True,
@@ -869,11 +1140,11 @@ class DictateApp:
         items.append(pystray.MenuItem(
             lambda item: (
                 f"Custom... ({self.current_hotkey})"
-                if self.current_hotkey not in HOTKEY_PRESETS
+                if self.current_hotkey not in preset_specs
                 else "Custom..."
             ),
             lambda icon, item: self._prompt_custom_hotkey(),
-            checked=lambda item: self.current_hotkey not in HOTKEY_PRESETS,
+            checked=lambda item: self.current_hotkey not in preset_specs,
             radio=True,
         ))
         return pystray.Menu(*items)
