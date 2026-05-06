@@ -1,0 +1,24 @@
+# Python venv (re-created by setup.bat)
+venv/
+.venv/
+env/
+.env
+
+# Bytecode / build
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+build/
+dist/
+*.egg-info/
+
+# Editor / OS junk
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# AriasSTT runtime artifacts (per-user, lives under %LOCALAPPDATA%\AriasSTT)
+*.log
+config.json
