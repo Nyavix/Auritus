@@ -100,7 +100,7 @@ Optional dual-mode trigger. Toggle remains the default.
 - Ignore key-down during `STATE_BUSY`; clear pending hold-state on `busy`
   exit so a release that arrived during transcription doesn't double-trigger.
 
-### P3 — Conflict probe via RegisterHotKey  `[ ]` (M, ~50 LOC, `dictate.py`)
+### P3 — Conflict probe via RegisterHotKey  `[x]` (M, ~50 LOC, `dictate.py`)
 
 At `set_hotkey()` time, run a Win32 `RegisterHotKey` probe:
 
@@ -114,7 +114,7 @@ At `set_hotkey()` time, run a Win32 `RegisterHotKey` probe:
 conflicts (Teams, Discord, Outlook) won't show up here. P4 is the only
 reliable detector for those.
 
-### P4 — Empirical "Test hotkey" check  `[ ]` (S, ~30 LOC, `dictate.py`)
+### P4 — Empirical "Test hotkey" check  `[x]` (S, ~30 LOC, `dictate.py`)
 
 Tray menu **"Test hotkey…"** entry:
 
@@ -125,7 +125,7 @@ Tray menu **"Test hotkey…"** entry:
 
 This is the only way to detect hook-swallow conflicts from inside the app.
 
-### P5 — Listener-failure resilience  `[ ]` (S, ~10 LOC, `dictate.py`)
+### P5 — Listener-failure resilience  `[x]` (S, ~10 LOC, `dictate.py`)
 
 If `_start_hotkey_listener` raises, set tray tooltip to `"⚠ hotkey error"` and
 emit an error toast, but keep the tray running so the user can rebind via the

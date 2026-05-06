@@ -97,6 +97,7 @@ import json
 import time
 import queue
 import struct
+import ctypes
 import tempfile
 import threading
 import traceback
@@ -161,6 +162,17 @@ def notify_error(title: str, message: str) -> None:
         log(f"error-notify failed: {e}")
 
 
+def notify_force(title: str, message: str, timeout: int = 4) -> None:
+    """Always-on toast for diagnostics that should bypass SHOW_NOTIFICATIONS."""
+    log(f"{title}: {message}")
+    if plyer_notification is None:
+        return
+    try:
+        plyer_notification.notify(title=title, message=message, app_name=APP_NAME, timeout=timeout)
+    except Exception as e:
+        log(f"force-notify failed: {e}")
+
+
 # ---------------------------------------------------------------------
 # Persisted user config (model selection)
 # ---------------------------------------------------------------------
@@ -190,6 +202,109 @@ def is_valid_hotkey(spec: str) -> bool:
         return True
     except Exception:
         return False
+
+
+# --- Win32 RegisterHotKey conflict probe (P3) ---------------------------
+# Detects the OS-level class of conflict (another app already registered the
+# combo via RegisterHotKey). Does NOT detect WH_KEYBOARD_LL hook-swallow
+# conflicts -- Teams / Discord / Outlook fall in the latter category and
+# only the empirical "Test hotkey" diagnostic catches those.
+
+_VK_SPECIAL = {
+    "<space>": 0x20, "<tab>": 0x09, "<enter>": 0x0D,
+    "<backspace>": 0x08, "<delete>": 0x2E, "<insert>": 0x2D,
+    "<home>": 0x24, "<end>": 0x23,
+    "<page_up>": 0x21, "<page_down>": 0x22,
+    "<up>": 0x26, "<down>": 0x28, "<left>": 0x25, "<right>": 0x27,
+    "<pause>": 0x13, "<scroll_lock>": 0x91, "<num_lock>": 0x90,
+    "<caps_lock>": 0x14, "<print_screen>": 0x2C, "<esc>": 0x1B,
+}
+
+# US-layout OEM virtual-key codes for the punctuation keys we accept.
+_VK_PUNCT = {
+    ";": 0xBA, "=": 0xBB, ",": 0xBC, "-": 0xBD, ".": 0xBE,
+    "/": 0xBF, "`": 0xC0, "[": 0xDB, "\\": 0xDC, "]": 0xDD, "'": 0xDE,
+}
+
+
+def _key_to_vk(token: str) -> int | None:
+    if token in _VK_SPECIAL:
+        return _VK_SPECIAL[token]
+    if token.startswith("<f") and token.endswith(">"):
+        try:
+            n = int(token[2:-1])
+        except ValueError:
+            return None
+        if 1 <= n <= 24:
+            return 0x6F + n  # VK_F1 = 0x70
+        return None
+    if len(token) == 1:
+        if token.isalpha():
+            return ord(token.upper())
+        if token.isdigit():
+            return ord(token)
+        if token in _VK_PUNCT:
+            return _VK_PUNCT[token]
+    return None
+
+
+def _spec_to_winhotkey(spec: str) -> tuple[int, int] | None:
+    """Translate a pynput hotkey spec to (modifiers_mask, vk_code)."""
+    MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN = 0x0001, 0x0002, 0x0004, 0x0008
+    mods = 0
+    vk: int | None = None
+    for raw in spec.split("+"):
+        token = raw.strip().lower()
+        if token == "<ctrl>":
+            mods |= MOD_CONTROL
+        elif token == "<shift>":
+            mods |= MOD_SHIFT
+        elif token == "<alt>":
+            mods |= MOD_ALT
+        elif token == "<cmd>":
+            mods |= MOD_WIN
+        else:
+            v = _key_to_vk(token)
+            if v is None:
+                return None
+            vk = v
+    if vk is None:
+        return None
+    return mods, vk
+
+
+def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
+    """Try to claim `spec` via Win32 RegisterHotKey, then release it.
+
+    Returns (available, message). `available=False` means another app has
+    already registered the same combo. `available=True` with a non-empty
+    message means we couldn't probe (unknown chord, non-Windows, etc.) and
+    the caller should treat it as inconclusive rather than blocking.
+    """
+    if not sys.platform.startswith("win"):
+        return True, "non-Windows: probe skipped"
+    parsed = _spec_to_winhotkey(spec)
+    if parsed is None:
+        return True, "unmappable chord: probe skipped"
+    mods, vk = parsed
+    HOTKEY_ID = 0xA51A  # arbitrary, just needs to be unique within process
+    user32 = ctypes.windll.user32
+    user32.RegisterHotKey.argtypes = [
+        ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+    ]
+    user32.RegisterHotKey.restype = ctypes.c_int
+    user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.UnregisterHotKey.restype = ctypes.c_int
+    ctypes.set_last_error(0)
+    ok = user32.RegisterHotKey(None, HOTKEY_ID, mods, vk)
+    if not ok:
+        err = ctypes.get_last_error()
+        ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+        if err == ERROR_HOTKEY_ALREADY_REGISTERED:
+            return False, "already registered by another app"
+        return False, f"RegisterHotKey failed (err={err})"
+    user32.UnregisterHotKey(None, HOTKEY_ID)
+    return True, ""
 
 
 # ---------------------------------------------------------------------
@@ -877,6 +992,8 @@ class DictateApp:
             log(f"Persisted hotkey {self.current_hotkey!r} invalid; falling back to {HOTKEY}")
             self.current_hotkey = HOTKEY
         self._hotkey_listener: keyboard.GlobalHotKeys | None = None
+        self._hotkey_bound: bool = False
+        self._hotkey_last_error: str | None = None
 
     def _save_config(self) -> None:
         save_user_config({"model": self.current_model, "hotkey": self.current_hotkey})
@@ -929,7 +1046,11 @@ class DictateApp:
     # -- hotkey ------------------------------------------------------
 
     def _start_hotkey_listener(self) -> None:
-        """Stop any existing listener and start a fresh one bound to current_hotkey."""
+        """Stop any existing listener and start a fresh one bound to current_hotkey.
+
+        On failure, marks `_hotkey_bound=False` and degrades the tray tooltip
+        so the user can still rebind via the menu.
+        """
         if self._hotkey_listener is not None:
             try:
                 self._hotkey_listener.stop()
@@ -940,10 +1061,27 @@ class DictateApp:
             listener = keyboard.GlobalHotKeys({self.current_hotkey: self.on_toggle})
             listener.start()
             self._hotkey_listener = listener
+            self._hotkey_bound = True
+            self._hotkey_last_error = None
             log(f"Hotkey listener bound to {self.current_hotkey}")
+            self._refresh_tooltip()
         except Exception as e:
+            self._hotkey_bound = False
+            self._hotkey_last_error = str(e)
             log(f"Hotkey listener crashed: {e}\n{traceback.format_exc()}")
             notify_error(APP_NAME, f"Hotkey error: {e}")
+            self._refresh_tooltip()
+
+    def _refresh_tooltip(self) -> None:
+        """Update tray tooltip based on listener health + current model."""
+        if self.icon is None:
+            return
+        if self._hotkey_bound:
+            self.icon.title = f"{APP_NAME} - idle ({self.current_model})"
+        else:
+            err = self._hotkey_last_error or "unknown"
+            err_short = err if len(err) <= 60 else err[:57] + "..."
+            self.icon.title = f"{APP_NAME} - ⚠ hotkey error: {err_short}"
 
     def set_hotkey(self, spec: str) -> None:
         spec = (spec or "").strip()
@@ -952,6 +1090,15 @@ class DictateApp:
         if not is_valid_hotkey(spec):
             notify_error(APP_NAME, f"Invalid hotkey: {spec}")
             return
+        # P3: best-effort RegisterHotKey conflict probe. Non-blocking -- a
+        # claimed combo may still work via the LL hook, and conversely an
+        # available probe doesn't rule out hook-swallow conflicts.
+        available, msg = probe_hotkey_conflict(spec)
+        if not available:
+            log(f"Conflict probe: {spec} -> {msg}")
+            notify_error(APP_NAME, f"⚠ {spec}: {msg}. Combo may be unreliable.")
+        elif msg:
+            log(f"Conflict probe inconclusive for {spec}: {msg}")
         self.current_hotkey = spec
         self._save_config()
         self._start_hotkey_listener()
@@ -973,6 +1120,64 @@ class DictateApp:
                 log(f"Hotkey prompt failed: {e}\n{traceback.format_exc()}")
                 notify_error(APP_NAME, f"Hotkey prompt failed: {e}")
         threading.Thread(target=_worker, daemon=True, name="hotkey-prompt").start()
+
+    def test_hotkey(self) -> None:
+        """Tray callback: arm a one-shot listener for 5s and report whether the
+        bound hotkey is delivered. Catches WH_KEYBOARD_LL hook-swallow conflicts
+        that the RegisterHotKey probe can't see (Teams, Discord, Outlook)."""
+        threading.Thread(
+            target=self._do_test_hotkey, daemon=True, name="hotkey-test"
+        ).start()
+
+    def _do_test_hotkey(self) -> None:
+        spec = self.current_hotkey
+        pretty = spec.replace("<", "").replace(">", "")
+        log(f"Test hotkey armed: {spec}")
+        notify_force(APP_NAME, f"Press {pretty} now (5s)...")
+
+        # Pause main listener so the test press doesn't accidentally trigger
+        # a recording. Track whether it was bound so we can restart it cleanly.
+        main_was_bound = self._hotkey_bound
+        if self._hotkey_listener is not None:
+            try:
+                self._hotkey_listener.stop()
+            except Exception as e:
+                log(f"Stop main listener for test failed: {e}")
+            self._hotkey_listener = None
+            self._hotkey_bound = False
+
+        detected = threading.Event()
+        t0 = time.time()
+        try:
+            test_listener = keyboard.GlobalHotKeys({spec: detected.set})
+            test_listener.start()
+            try:
+                detected.wait(timeout=5.0)
+            finally:
+                try:
+                    test_listener.stop()
+                except Exception as e:
+                    log(f"Stop test listener failed: {e}")
+        except Exception as e:
+            log(f"Test listener crashed: {e}\n{traceback.format_exc()}")
+            notify_error(APP_NAME, f"Test failed: {e}")
+            if main_was_bound:
+                self._start_hotkey_listener()
+            return
+
+        elapsed_ms = int((time.time() - t0) * 1000)
+        if detected.is_set():
+            log(f"Test hotkey: detected in {elapsed_ms} ms")
+            notify_force(APP_NAME, f"✓ {pretty} detected ({elapsed_ms} ms)")
+        else:
+            log(f"Test hotkey: {spec} not received within 5s")
+            notify_error(
+                APP_NAME,
+                f"✗ {pretty} not received within 5s — likely swallowed by another app",
+            )
+
+        if main_was_bound:
+            self._start_hotkey_listener()
 
     # -- mic check ---------------------------------------------------
 
@@ -1147,6 +1352,11 @@ class DictateApp:
             checked=lambda item: self.current_hotkey not in preset_specs,
             radio=True,
         ))
+        items.append(pystray.Menu.SEPARATOR)
+        items.append(pystray.MenuItem(
+            "Test hotkey...",
+            lambda icon, item: self.test_hotkey(),
+        ))
         return pystray.Menu(*items)
 
     def _build_menu(self) -> pystray.Menu:
@@ -1221,6 +1431,8 @@ class DictateApp:
             f"{APP_NAME} - idle ({self.current_model})",
             self._build_menu(),
         )
+        # Reflect actual listener state in the tooltip (P5).
+        self._refresh_tooltip()
         self.icon.run()
         log(f"=== {APP_NAME} stopped ===")
 
