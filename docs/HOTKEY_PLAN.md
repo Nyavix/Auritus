@@ -155,8 +155,23 @@ menu. Most of this is already in place; just polish the surfaced state.
 
 ## Status
 
-All P0–P5 shipped on `main` as of v0.1.x. Remaining work tracked in
-*Open questions* below; future revisions land in follow-up PRs.
+All P0–P5 shipped on `main` as of v0.1.x. Subsequent rounds:
+
+- **P6** — glass overlay + waveform (single-window with DWM acrylic, then
+  reworked into a two-window stack with a translucent rounded panel and
+  an opaque foreground for the white border + dot + waveform + label).
+- **P7** — stability hardening following a Codex review pass: lock around
+  the dead-man timer, internal lock on `_HoldChord`, rotating ID for the
+  RegisterHotKey conflict probe, `set_hotkey` and `Test hotkey…`
+  state-claim guards, overlay `_destroy` cancels pending `after()`
+  callbacks first, removed the no-op normalization in `_transcribe`.
+- **P8** — UI polish following a Gemini UX review pass: process-level DPI
+  awareness so tk renders crisply on 4K screens, and `WS_EX_TRANSPARENT`
+  on both overlay HWNDs so clicks pass through to the focused text field
+  instead of stealing focus.
+
+Remaining work tracked in *Open questions* below; future revisions land
+in follow-up PRs.
 
 ## Open questions
 

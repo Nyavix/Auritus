@@ -302,6 +302,23 @@ def _spec_to_winhotkey(spec: str) -> tuple[int, int] | None:
     return mods, vk
 
 
+_PROBE_ID_LOCK = threading.Lock()
+_PROBE_ID_NEXT = 0xA51A
+
+
+def _next_probe_id() -> int:
+    """Rotate the RegisterHotKey ID per probe so a leaked registration
+    (e.g. an UnregisterHotKey failure) doesn't spuriously flag every
+    subsequent probe as conflict."""
+    global _PROBE_ID_NEXT
+    with _PROBE_ID_LOCK:
+        v = _PROBE_ID_NEXT
+        _PROBE_ID_NEXT += 1
+        if _PROBE_ID_NEXT > 0xBFFF:  # app-defined IDs cap
+            _PROBE_ID_NEXT = 0xA51A
+        return v
+
+
 def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
     """Try to claim `spec` via Win32 RegisterHotKey, then release it.
 
@@ -316,7 +333,7 @@ def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
     if parsed is None:
         return True, "unmappable chord: probe skipped"
     mods, vk = parsed
-    HOTKEY_ID = 0xA51A  # arbitrary, just needs to be unique within process
+    hotkey_id = _next_probe_id()
     user32 = ctypes.windll.user32
     user32.RegisterHotKey.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
@@ -325,15 +342,47 @@ def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
     user32.UnregisterHotKey.argtypes = [ctypes.c_void_p, ctypes.c_int]
     user32.UnregisterHotKey.restype = ctypes.c_int
     ctypes.set_last_error(0)
-    ok = user32.RegisterHotKey(None, HOTKEY_ID, mods, vk)
+    ok = user32.RegisterHotKey(None, hotkey_id, mods, vk)
     if not ok:
         err = ctypes.get_last_error()
         ERROR_HOTKEY_ALREADY_REGISTERED = 1409
         if err == ERROR_HOTKEY_ALREADY_REGISTERED:
             return False, "already registered by another app"
         return False, f"RegisterHotKey failed (err={err})"
-    user32.UnregisterHotKey(None, HOTKEY_ID)
+    if not user32.UnregisterHotKey(None, hotkey_id):
+        # Best effort -- next probe rotates the ID anyway.
+        log(f"UnregisterHotKey({hex(hotkey_id)}) returned 0 after successful register")
     return True, ""
+
+
+# --- Click-through helper for the overlay (P8) ------------------------
+# Add WS_EX_TRANSPARENT so mouse clicks pass through the overlay window to
+# whatever is underneath. Without this, clicking the panel can steal focus
+# from the user's text field, killing the auto-paste flow. Also OR in
+# WS_EX_LAYERED defensively (tk usually sets it via -alpha, but be explicit).
+
+_GWL_EXSTYLE = -20
+_WS_EX_LAYERED = 0x00080000
+_WS_EX_TRANSPARENT = 0x00000020
+_WS_EX_NOACTIVATE = 0x08000000
+
+
+def _make_window_clickthrough(hwnd: int) -> bool:
+    if not hwnd:
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.GetWindowLongW.restype = ctypes.c_long
+        user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
+        user32.SetWindowLongW.restype = ctypes.c_long
+        cur = user32.GetWindowLongW(ctypes.c_void_p(hwnd), _GWL_EXSTYLE)
+        new = cur | _WS_EX_LAYERED | _WS_EX_TRANSPARENT | _WS_EX_NOACTIVATE
+        user32.SetWindowLongW(ctypes.c_void_p(hwnd), _GWL_EXSTYLE, new)
+        return True
+    except Exception as e:
+        log(f"clickthrough apply failed: {e}")
+        return False
 
 
 # --- Rounded-rectangle helper for the overlay (P6) --------------------
@@ -372,6 +421,9 @@ class _HoldChord:
     Edge-triggered: `on_engage` fires on the rising edge (full chord first
     held), `on_release` fires on the falling edge (any target key released
     while engaged). Auto-repeat key-presses do not retrigger engage.
+
+    Internal state is guarded by a lock; callbacks are invoked OUTSIDE the
+    lock so a callback that re-enters press/release can't deadlock.
     """
 
     def __init__(self, keys, on_engage, on_release):
@@ -380,13 +432,18 @@ class _HoldChord:
         self._engaged: bool = False
         self._on_engage = on_engage
         self._on_release = on_release
+        self._lock = threading.Lock()
 
     def press(self, key) -> None:
         if key not in self._target:
             return
-        self._held.add(key)
-        if not self._engaged and self._held == self._target:
-            self._engaged = True
+        fire = False
+        with self._lock:
+            self._held.add(key)
+            if not self._engaged and self._held == self._target:
+                self._engaged = True
+                fire = True
+        if fire:
             try:
                 self._on_engage()
             except Exception as e:
@@ -395,9 +452,13 @@ class _HoldChord:
     def release(self, key) -> None:
         if key not in self._target:
             return
-        self._held.discard(key)
-        if self._engaged and self._held != self._target:
-            self._engaged = False
+        fire = False
+        with self._lock:
+            self._held.discard(key)
+            if self._engaged and self._held != self._target:
+                self._engaged = False
+                fire = True
+        if fire:
             try:
                 self._on_release()
             except Exception as e:
@@ -561,6 +622,7 @@ class RecordingOverlay:
         self._wave_points: int = 0
         self._wave_x0: int = 0
         self._wave_x1: int = 0
+        self._clickthrough_applied: bool = False
         self._ready = threading.Event()
 
     # -- lifecycle ---------------------------------------------------------
@@ -716,6 +778,15 @@ class RecordingOverlay:
     # -- overlay-thread handlers ------------------------------------------
 
     def _destroy(self) -> None:
+        # Stop the per-frame redraw before destroying the canvases so an
+        # in-flight after() callback doesn't fire on a destroyed widget.
+        self._visible = False
+        if self._poll_handle is not None and self._bg_root is not None:
+            try:
+                self._bg_root.after_cancel(self._poll_handle)
+            except Exception:
+                pass
+            self._poll_handle = None
         try:
             if self._fg_root is not None:
                 self._fg_root.destroy()
@@ -740,8 +811,29 @@ class RecordingOverlay:
                 self._fg_root.lift(self._bg_root)
             except Exception:
                 pass
+        # Apply click-through once both windows have real HWNDs (post-deiconify).
+        if not self._clickthrough_applied:
+            self._apply_clickthrough()
+            self._clickthrough_applied = True
         self._visible = True
         self._tick()
+
+    def _apply_clickthrough(self) -> None:
+        """Mark both overlay HWNDs as transparent to mouse input so clicks
+        pass through to whatever's underneath (typically the user's text
+        field). Without this, an accidental click on the overlay would steal
+        focus and break the auto-paste flow."""
+        for root in (self._bg_root, self._fg_root):
+            if root is None:
+                continue
+            try:
+                inner = root.winfo_id()
+                top = ctypes.windll.user32.GetParent(inner)
+                hwnd = top if top else inner
+            except Exception as e:
+                log(f"clickthrough HWND lookup failed: {e}")
+                continue
+            _make_window_clickthrough(hwnd)
 
     def _do_set_state(self, state: str) -> None:
         if self._fg_canvas is None:
@@ -1300,8 +1392,10 @@ class DictateApp:
 
         # Dead-man's switch: forces a stop after MAX_RECORD_SECONDS even if
         # the chord release is missed (relevant for hold mode, but covers
-        # toggle too).
+        # toggle too). Guarded by its own lock so arm/cancel/auto-stop don't
+        # race on the timer reference under rapid start-stop-start cycles.
         self._max_record_timer: threading.Timer | None = None
+        self._timer_lock = threading.Lock()
 
     def _save_config(self) -> None:
         save_user_config({
@@ -1465,6 +1559,10 @@ class DictateApp:
         if not is_valid_hotkey(spec):
             notify_error(APP_NAME, f"Invalid hotkey: {spec}")
             return
+        with self._state_lock:
+            if self.state != self.STATE_IDLE:
+                notify_error(APP_NAME, "Finish current dictation before changing hotkey.")
+                return
         # P3: best-effort RegisterHotKey conflict probe. Non-blocking -- a
         # claimed combo may still work via the LL hook, and conversely an
         # available probe doesn't rule out hook-swallow conflicts.
@@ -1507,11 +1605,19 @@ class DictateApp:
     def _do_test_hotkey(self) -> None:
         spec = self.current_hotkey
         pretty = spec.replace("<", "").replace(">", "")
+
+        # Claim BUSY for the duration so the tray "Toggle dictation" item and
+        # the on_toggle hotkey path can't fire mid-test. set_mode/set_hotkey
+        # already check STATE_IDLE so they'll bail too.
+        with self._state_lock:
+            if self.state != self.STATE_IDLE:
+                notify_error(APP_NAME, "Finish current dictation before testing.")
+                return
+            self.state = self.STATE_BUSY
+
         log(f"Test hotkey armed: {spec}")
         notify_force(APP_NAME, f"Press {pretty} now (5s)...")
 
-        # Pause main listener so the test press doesn't accidentally trigger
-        # a recording. Track whether it was bound so we can restart it cleanly.
         main_was_bound = self._hotkey_bound
         if self._hotkey_listener is not None:
             try:
@@ -1523,36 +1629,43 @@ class DictateApp:
 
         detected = threading.Event()
         t0 = time.time()
+        test_failed = False
         try:
-            test_listener = keyboard.GlobalHotKeys({spec: detected.set})
-            test_listener.start()
             try:
-                detected.wait(timeout=5.0)
-            finally:
+                test_listener = keyboard.GlobalHotKeys({spec: detected.set})
+                test_listener.start()
                 try:
-                    test_listener.stop()
-                except Exception as e:
-                    log(f"Stop test listener failed: {e}")
-        except Exception as e:
-            log(f"Test listener crashed: {e}\n{traceback.format_exc()}")
-            notify_error(APP_NAME, f"Test failed: {e}")
-            if main_was_bound:
+                    detected.wait(timeout=5.0)
+                finally:
+                    try:
+                        test_listener.stop()
+                    except Exception as e:
+                        log(f"Stop test listener failed: {e}")
+            except Exception as e:
+                test_failed = True
+                log(f"Test listener crashed: {e}\n{traceback.format_exc()}")
+                notify_error(APP_NAME, f"Test failed: {e}")
+
+            if not test_failed:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                if detected.is_set():
+                    log(f"Test hotkey: detected in {elapsed_ms} ms")
+                    notify_force(APP_NAME, f"✓ {pretty} detected ({elapsed_ms} ms)")
+                else:
+                    log(f"Test hotkey: {spec} not received within 5s")
+                    notify_error(
+                        APP_NAME,
+                        f"✗ {pretty} not received within 5s — likely swallowed by another app",
+                    )
+        finally:
+            with self._state_lock:
+                # Only revert if we still own BUSY -- something pathological
+                # (e.g. a model swap) might have transitioned away.
+                if self.state == self.STATE_BUSY:
+                    self.state = self.STATE_IDLE
+            # Skip listener restart on quit so we don't spawn an orphan.
+            if main_was_bound and not self._stop_event.is_set():
                 self._start_hotkey_listener()
-            return
-
-        elapsed_ms = int((time.time() - t0) * 1000)
-        if detected.is_set():
-            log(f"Test hotkey: detected in {elapsed_ms} ms")
-            notify_force(APP_NAME, f"✓ {pretty} detected ({elapsed_ms} ms)")
-        else:
-            log(f"Test hotkey: {spec} not received within 5s")
-            notify_error(
-                APP_NAME,
-                f"✗ {pretty} not received within 5s — likely swallowed by another app",
-            )
-
-        if main_was_bound:
-            self._start_hotkey_listener()
 
     # -- mic check ---------------------------------------------------
 
@@ -1626,13 +1739,18 @@ class DictateApp:
         self._arm_max_record_timer()
 
     def _arm_max_record_timer(self) -> None:
-        self._cancel_max_record_timer()
-        timer = threading.Timer(MAX_RECORD_SECONDS, self._auto_stop)
-        timer.daemon = True
-        timer.start()
-        self._max_record_timer = timer
+        with self._timer_lock:
+            self._cancel_max_record_timer_locked()
+            timer = threading.Timer(MAX_RECORD_SECONDS, self._auto_stop)
+            timer.daemon = True
+            timer.start()
+            self._max_record_timer = timer
 
     def _cancel_max_record_timer(self) -> None:
+        with self._timer_lock:
+            self._cancel_max_record_timer_locked()
+
+    def _cancel_max_record_timer_locked(self) -> None:
         t = self._max_record_timer
         if t is not None:
             try:
@@ -1706,10 +1824,10 @@ class DictateApp:
         # faster-whisper accepts a numpy float32 array at 16 kHz directly.
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
-        # Normalize peaks to avoid clipping artifacts hurting the model.
-        peak = float(np.max(np.abs(audio))) if audio.size else 0.0
-        if peak > 0:
-            audio = audio / max(peak, 1.0)
+        # sounddevice float32 input is already in [-1, 1] -- Whisper handles
+        # quiet audio internally via vad_filter, so no extra normalization
+        # pass here. (The previous `audio / max(peak, 1.0)` was a no-op for
+        # any peak < 1.0, which is the typical case.)
 
         segments, info = self.model.transcribe(
             audio,
@@ -1865,7 +1983,36 @@ class DictateApp:
         log(f"=== {APP_NAME} stopped ===")
 
 
+def _enable_dpi_awareness() -> None:
+    """Tell Windows to give us real (un-scaled) pixels so tkinter, the tray
+    icon, and the overlay don't render blurry on high-DPI displays. Tries
+    the most modern API first and falls back along the way. Must run before
+    any tk window is created, so call this from main() before DictateApp."""
+    if not sys.platform.startswith("win"):
+        return
+    # Win10 1607+: per-monitor v2 (best behavior across mixed-DPI setups).
+    try:
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(
+            ctypes.c_void_p(-4)
+        ):
+            return
+    except Exception:
+        pass
+    # Win8.1+: per-monitor v1.
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        return
+    except Exception:
+        pass
+    # Vista+: system-DPI aware.
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 def main():
+    _enable_dpi_awareness()
     try:
         DictateApp().run()
     except Exception as e:
