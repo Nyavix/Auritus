@@ -97,8 +97,9 @@ OVERLAY_OPACITY = 0.7
 OVERLAY_ACCENT = "#ffffff"
 OVERLAY_BORDER_WIDTH = 3
 
-# Try to apply Win11 rounded corners. Silently no-ops on Win10 and below.
-OVERLAY_ROUND = True
+# Corner radius (px) for the rounded panel + border. Drawn on canvas so it
+# works on every Windows version.
+OVERLAY_CORNER_RADIUS = 14
 
 # Waveform polyline color while recording.
 OVERLAY_WAVE_COLOR = "#ff6868"
@@ -335,34 +336,28 @@ def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
     return True, ""
 
 
-# --- DWM glass + rounded-corner helpers (P6) ---------------------------
-# Win11 22H2+ exposes the system backdrop attribute (acrylic / mica) and a
-# corner-preference attribute via DwmSetWindowAttribute. Both calls are
-# best-effort: failures fall through silently and the overlay degrades to a
-# solid dark panel with sharp corners.
+# --- Rounded-rectangle helper for the overlay (P6) --------------------
+# Tk's Canvas has no native rounded rectangle. The standard recipe is a
+# 20-point polygon with `smooth=True` -- duplicate points produce straight
+# segments, single corner points get bezier-smoothed. Both fill and stroke
+# follow the rounded path, so a single create_polygon call gives us a clean
+# rounded-rect with optional border.
 
-_DWMWA_WINDOW_CORNER_PREFERENCE = 33     # int  — 0=default 1=donotround 2=round 3=roundsmall
-
-_DWMWCP_ROUND = 2
-
-
-def _dwm_set_attribute(hwnd: int, attr: int, value: int) -> bool:
-    if not hwnd:
-        return False
-    try:
-        v = ctypes.c_int(value)
-        hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
-            ctypes.c_void_p(hwnd), ctypes.c_uint(attr),
-            ctypes.byref(v), ctypes.sizeof(v),
-        )
-        return hr == 0
-    except Exception as e:
-        log(f"DwmSetWindowAttribute({attr}) failed: {e}")
-        return False
-
-
-def _dwm_apply_rounded(hwnd: int) -> bool:
-    return _dwm_set_attribute(hwnd, _DWMWA_WINDOW_CORNER_PREFERENCE, _DWMWCP_ROUND)
+def _round_rect_points(x1: float, y1: float, x2: float, y2: float, r: float) -> list[float]:
+    return [
+        x1 + r, y1,    x1 + r, y1,
+        x2 - r, y1,    x2 - r, y1,
+        x2,     y1,
+        x2,     y1 + r,    x2, y1 + r,
+        x2,     y2 - r,    x2, y2 - r,
+        x2,     y2,
+        x2 - r, y2,    x2 - r, y2,
+        x1 + r, y2,    x1 + r, y2,
+        x1,     y2,
+        x1,     y2 - r,    x1, y2 - r,
+        x1,     y1 + r,    x1, y1 + r,
+        x1,     y1,
+    ]
 
 
 # --- Hold-mode chord tracker (P2) --------------------------------------
@@ -525,35 +520,44 @@ ICON_BUSY = _make_icon((220, 180, 60, 255))      # amber
 # ---------------------------------------------------------------------
 
 class RecordingOverlay:
-    """Always-on-top floating panel with a glass background and a live audio
-    waveform. Runs its own tk.Tk root on a dedicated thread; all public
-    methods marshal onto that thread via root.after.
+    """Two-window floating overlay.
 
-    Recording state: red waveform polyline driven by Recorder.peek_recent_samples.
-    Transcribing state: pulsing amber dot + label (waveform hidden, since the
-    audio stream has stopped).
+    Layered design so the user can have a translucent panel with crisp,
+    fully-opaque content on top:
+
+      * `_bg_root`  — translucent dark rounded panel (alpha = OVERLAY_OPACITY)
+      * `_fg_root`  — opaque rounded border + status dot + waveform + label
+                       (alpha = 1.0, transparent everywhere else)
+
+    Both windows are frameless, topmost, and move/show/hide together. The
+    rounded shape is drawn on canvas so it works on every Windows version
+    (no DWM dependency). A magic transparent-color key cuts the rectangular
+    window down to the rounded outline.
     """
 
+    TRANSPARENT_KEY = "#010203"   # near-black sentinel used as alpha mask
     TEXT_COLOR = "#e8eef5"
     DOT_RECORDING = "#ff6868"
     DOT_TRANSCRIBING = "#f0c85a"
-    POLL_MS = 33                # ~30 fps refresh
-    WAVE_DURATION_S = 0.15      # window of audio shown in the waveform
+    POLL_MS = 33                  # ~30 fps refresh
+    WAVE_DURATION_S = 0.15        # window of audio shown in the waveform
 
     def __init__(self, recorder: "Recorder"):
         self._recorder = recorder
         self._thread: threading.Thread | None = None
-        self._root: tk.Tk | None = None
-        self._canvas: tk.Canvas | None = None
+        self._bg_root: tk.Tk | None = None
+        self._fg_root: tk.Toplevel | None = None
+        self._bg_canvas: tk.Canvas | None = None
+        self._fg_canvas: tk.Canvas | None = None
+        self._bg_panel_id: int = 0
+        self._border_id: int = 0
         self._wave_id: int = 0
         self._dot_id: int = 0
         self._text_id: int = 0
-        self._border_id: int = 0
         self._state: str = "recording"
         self._visible: bool = False
         self._poll_handle = None
         self._pulse_phase: float = 0.0
-        self._fx_applied: bool = False
         self._wave_points: int = 0
         self._wave_x0: int = 0
         self._wave_x1: int = 0
@@ -570,71 +574,107 @@ class RecordingOverlay:
 
     def _run(self) -> None:
         try:
-            root = tk.Tk()
-            root.withdraw()
-            root.overrideredirect(True)
-            root.attributes("-topmost", True)
-            root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
-            root.resizable(False, False)
-            root.configure(bg=OVERLAY_FILL_COLOR)
-            # Global window alpha gives the see-through-but-dark look. Border
-            # and waveform fade with the background so the whole panel feels
-            # like a single translucent surface.
-            try:
-                root.attributes("-alpha", float(OVERLAY_OPACITY))
-            except Exception as e:
-                log(f"overlay alpha failed: {e}")
+            W, H = OVERLAY_WIDTH, OVERLAY_HEIGHT
+            BW = OVERLAY_BORDER_WIDTH
+            R = OVERLAY_CORNER_RADIUS
+            inset = BW / 2.0
+            panel_pts = _round_rect_points(inset, inset, W - inset, H - inset, R)
 
-            canvas = tk.Canvas(
-                root,
-                width=OVERLAY_WIDTH, height=OVERLAY_HEIGHT,
-                bg=OVERLAY_FILL_COLOR,
+            # --- BG window: translucent rounded fill ---------------------
+            bg = tk.Tk()
+            bg.withdraw()
+            bg.overrideredirect(True)
+            bg.attributes("-topmost", True)
+            bg.geometry(f"{W}x{H}")
+            bg.resizable(False, False)
+            bg.configure(bg=self.TRANSPARENT_KEY)
+            try:
+                bg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
+            except Exception as e:
+                log(f"overlay bg transparentcolor failed: {e}")
+            try:
+                bg.attributes("-alpha", float(OVERLAY_OPACITY))
+            except Exception as e:
+                log(f"overlay bg alpha failed: {e}")
+
+            bg_canvas = tk.Canvas(
+                bg, width=W, height=H,
+                bg=self.TRANSPARENT_KEY,
                 highlightthickness=0, borderwidth=0,
             )
-            canvas.pack(fill="both", expand=True)
-
-            # Border: rectangle outline. Inset by half the stroke width so the
-            # border draws fully inside the panel instead of clipping at the
-            # window edge.
-            inset = max(1, OVERLAY_BORDER_WIDTH // 2)
-            self._border_id = canvas.create_rectangle(
-                inset, inset,
-                OVERLAY_WIDTH - inset, OVERLAY_HEIGHT - inset,
-                outline=OVERLAY_ACCENT, width=OVERLAY_BORDER_WIDTH,
+            bg_canvas.pack(fill="both", expand=True)
+            self._bg_panel_id = bg_canvas.create_polygon(
+                *panel_pts, smooth=True,
+                fill=OVERLAY_FILL_COLOR, outline="", width=0,
             )
-            # Status dot near the left edge.
-            dot_r = max(3, OVERLAY_HEIGHT // 10)
-            dot_cx = OVERLAY_BORDER_WIDTH + 6 + dot_r
-            dot_cy = OVERLAY_HEIGHT // 2
-            self._dot_id = canvas.create_oval(
+
+            # --- FG window: opaque border + content ---------------------
+            fg = tk.Toplevel(bg)
+            fg.withdraw()
+            fg.overrideredirect(True)
+            fg.attributes("-topmost", True)
+            fg.geometry(f"{W}x{H}")
+            fg.resizable(False, False)
+            fg.configure(bg=self.TRANSPARENT_KEY)
+            try:
+                fg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
+            except Exception as e:
+                log(f"overlay fg transparentcolor failed: {e}")
+            try:
+                fg.attributes("-alpha", 1.0)
+            except Exception:
+                pass
+
+            fg_canvas = tk.Canvas(
+                fg, width=W, height=H,
+                bg=self.TRANSPARENT_KEY,
+                highlightthickness=0, borderwidth=0,
+            )
+            fg_canvas.pack(fill="both", expand=True)
+
+            # White rounded border, no fill (lets the bg panel show through).
+            self._border_id = fg_canvas.create_polygon(
+                *panel_pts, smooth=True,
+                fill="", outline=OVERLAY_ACCENT, width=BW,
+            )
+
+            # Status dot tucked away from the rounded corner.
+            dot_r = max(3, H // 10)
+            dot_cx = BW + R // 2 + dot_r
+            dot_cy = H // 2
+            self._dot_id = fg_canvas.create_oval(
                 dot_cx - dot_r, dot_cy - dot_r,
                 dot_cx + dot_r, dot_cy + dot_r,
                 fill=self.DOT_RECORDING, outline="",
             )
-            # Waveform spans from just right of the dot to just before the right border.
+
+            # Waveform spans from just right of the dot to just before the right border arc.
             self._wave_x0 = dot_cx + dot_r + 6
-            self._wave_x1 = OVERLAY_WIDTH - OVERLAY_BORDER_WIDTH - 6
+            self._wave_x1 = W - BW - R // 2 - 4
             self._wave_points = max(20, (self._wave_x1 - self._wave_x0) // 3)
-            cy = OVERLAY_HEIGHT // 2
+            cy = H // 2
             flat = []
             for i in range(self._wave_points):
                 x = self._wave_x0 + (self._wave_x1 - self._wave_x0) * i / max(1, self._wave_points - 1)
                 flat.extend([x, cy])
-            self._wave_id = canvas.create_line(
+            self._wave_id = fg_canvas.create_line(
                 *flat,
                 fill=OVERLAY_WAVE_COLOR, width=2, smooth=True, capstyle="round",
             )
-            # Centered status text (used for transcribing state).
-            self._text_id = canvas.create_text(
-                OVERLAY_WIDTH // 2, OVERLAY_HEIGHT // 2,
+
+            # Centered status text (used in the transcribing state).
+            self._text_id = fg_canvas.create_text(
+                W // 2, H // 2,
                 text="", fill=self.TEXT_COLOR,
                 font=("Segoe UI", 11, "bold"),
             )
 
-            self._canvas = canvas
-            self._root = root
+            self._bg_root = bg
+            self._fg_root = fg
+            self._bg_canvas = bg_canvas
+            self._fg_canvas = fg_canvas
             self._ready.set()
-            root.mainloop()
+            bg.mainloop()
         except Exception as e:
             log(f"overlay thread error: {e}\n{traceback.format_exc()}")
             self._ready.set()
@@ -642,79 +682,100 @@ class RecordingOverlay:
     # -- thread-safe public API -------------------------------------------
 
     def show(self, state: str = "recording") -> None:
-        if self._root is None:
+        if self._bg_root is None:
             return
         try:
-            self._root.after(0, lambda: self._do_show(state))
+            self._bg_root.after(0, lambda: self._do_show(state))
         except Exception as e:
             log(f"overlay show error: {e}")
 
     def set_state(self, state: str) -> None:
-        if self._root is None:
+        if self._bg_root is None:
             return
         try:
-            self._root.after(0, lambda: self._do_set_state(state))
+            self._bg_root.after(0, lambda: self._do_set_state(state))
         except Exception as e:
             log(f"overlay set_state error: {e}")
 
     def hide(self) -> None:
-        if self._root is None:
+        if self._bg_root is None:
             return
         try:
-            self._root.after(0, self._do_hide)
+            self._bg_root.after(0, self._do_hide)
         except Exception as e:
             log(f"overlay hide error: {e}")
 
     def stop(self) -> None:
-        if self._root is None:
+        if self._bg_root is None:
             return
         try:
-            self._root.after(0, self._root.destroy)
+            self._bg_root.after(0, self._destroy)
         except Exception:
             pass
 
     # -- overlay-thread handlers ------------------------------------------
 
+    def _destroy(self) -> None:
+        try:
+            if self._fg_root is not None:
+                self._fg_root.destroy()
+        except Exception:
+            pass
+        try:
+            if self._bg_root is not None:
+                self._bg_root.destroy()
+        except Exception:
+            pass
+
     def _do_show(self, state: str) -> None:
         self._reposition()
         self._do_set_state(state)
-        self._root.deiconify()
-        self._root.lift()
-        self._root.attributes("-topmost", True)
+        if self._bg_root is not None:
+            self._bg_root.deiconify()
+            self._bg_root.attributes("-topmost", True)
+        if self._fg_root is not None:
+            self._fg_root.deiconify()
+            self._fg_root.attributes("-topmost", True)
+            try:
+                self._fg_root.lift(self._bg_root)
+            except Exception:
+                pass
         self._visible = True
-        if not self._fx_applied:
-            self._apply_window_effects()
-            self._fx_applied = True
         self._tick()
 
     def _do_set_state(self, state: str) -> None:
-        if self._canvas is None:
+        if self._fg_canvas is None:
             return
         self._state = state
         if state == "recording":
-            self._canvas.itemconfigure(self._dot_id, fill=self.DOT_RECORDING)
-            self._canvas.itemconfigure(self._text_id, text="")
-            self._canvas.itemconfigure(self._wave_id, state="normal", fill=OVERLAY_WAVE_COLOR)
+            self._fg_canvas.itemconfigure(self._dot_id, fill=self.DOT_RECORDING)
+            self._fg_canvas.itemconfigure(self._text_id, text="")
+            self._fg_canvas.itemconfigure(self._wave_id, state="normal", fill=OVERLAY_WAVE_COLOR)
         elif state == "transcribing":
-            self._canvas.itemconfigure(self._dot_id, fill=self.DOT_TRANSCRIBING)
-            self._canvas.itemconfigure(
+            self._fg_canvas.itemconfigure(self._dot_id, fill=self.DOT_TRANSCRIBING)
+            self._fg_canvas.itemconfigure(
                 self._text_id, text=OVERLAY_TRANSCRIBING_TEXT, fill=self.DOT_TRANSCRIBING,
             )
-            self._canvas.itemconfigure(self._wave_id, state="hidden")
+            self._fg_canvas.itemconfigure(self._wave_id, state="hidden")
 
     def _do_hide(self) -> None:
         self._visible = False
-        if self._poll_handle is not None:
+        if self._poll_handle is not None and self._bg_root is not None:
             try:
-                self._root.after_cancel(self._poll_handle)
+                self._bg_root.after_cancel(self._poll_handle)
             except Exception:
                 pass
             self._poll_handle = None
-        self._root.withdraw()
+        if self._fg_root is not None:
+            self._fg_root.withdraw()
+        if self._bg_root is not None:
+            self._bg_root.withdraw()
 
     def _reposition(self) -> None:
-        sw = self._root.winfo_screenwidth()
-        sh = self._root.winfo_screenheight()
+        if self._bg_root is None:
+            return
+        sw = self._bg_root.winfo_screenwidth()
+        sh = self._bg_root.winfo_screenheight()
         ww = OVERLAY_WIDTH
         wh = OVERLAY_HEIGHT
         pos = (OVERLAY_POSITION or "top").lower()
@@ -727,32 +788,22 @@ class RecordingOverlay:
         else:  # "top"
             x = (sw - ww) // 2
             y = OVERLAY_MARGIN
-        self._root.geometry(f"{ww}x{wh}+{x}+{y}")
-
-    def _apply_window_effects(self) -> None:
-        """Apply Win11 rounded corners (best-effort, no-op on Win10)."""
-        if not OVERLAY_ROUND:
-            return
-        try:
-            inner = self._root.winfo_id()
-            top = ctypes.windll.user32.GetParent(inner)
-            hwnd = top if top else inner
-        except Exception as e:
-            log(f"overlay HWND lookup failed: {e}")
-            return
-        _dwm_apply_rounded(hwnd)
+        geom = f"{ww}x{wh}+{x}+{y}"
+        self._bg_root.geometry(geom)
+        if self._fg_root is not None:
+            self._fg_root.geometry(geom)
 
     # -- per-frame draw ---------------------------------------------------
 
     def _tick(self) -> None:
-        if not self._visible or self._canvas is None or self._root is None:
+        if not self._visible or self._fg_canvas is None or self._bg_root is None:
             return
         if self._state == "recording":
             self._draw_wave()
         elif self._state == "transcribing":
             self._draw_pulse()
         try:
-            self._poll_handle = self._root.after(self.POLL_MS, self._tick)
+            self._poll_handle = self._bg_root.after(self.POLL_MS, self._tick)
         except Exception:
             self._poll_handle = None
 
@@ -783,7 +834,7 @@ class RecordingOverlay:
             if peak < floor:
                 norm = norm * (peak / floor)
         cy = OVERLAY_HEIGHT // 2
-        amp = (OVERLAY_HEIGHT // 2) - 10
+        amp = (OVERLAY_HEIGHT // 2) - OVERLAY_BORDER_WIDTH - 4
         x0, x1 = self._wave_x0, self._wave_x1
         denom = max(1, N - 1)
         pts: list[float] = []
@@ -793,7 +844,7 @@ class RecordingOverlay:
             pts.append(x)
             pts.append(y)
         try:
-            self._canvas.coords(self._wave_id, *pts)
+            self._fg_canvas.coords(self._wave_id, *pts)
         except Exception as e:
             log(f"overlay coords error: {e}")
 
@@ -801,9 +852,13 @@ class RecordingOverlay:
         self._pulse_phase += self.POLL_MS / 1000.0 * 4.0  # ~4 rad/s
         s = (math.sin(self._pulse_phase) + 1.0) / 2.0  # 0..1
         r = 4.0 + 3.0 * s
-        cx, cy = 18.0, OVERLAY_HEIGHT / 2.0
+        BW = OVERLAY_BORDER_WIDTH
+        R = OVERLAY_CORNER_RADIUS
+        dot_r_static = max(3, OVERLAY_HEIGHT // 10)
+        cx = float(BW + R // 2 + dot_r_static)
+        cy = OVERLAY_HEIGHT / 2.0
         try:
-            self._canvas.coords(self._dot_id, cx - r, cy - r, cx + r, cy + r)
+            self._fg_canvas.coords(self._dot_id, cx - r, cy - r, cx + r, cy + r)
         except Exception:
             pass
 

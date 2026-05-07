@@ -109,7 +109,7 @@ All knobs live at the top of `dictate.py`:
 | `OVERLAY_OPACITY` | `0.7` | Window-wide alpha, `0.0`–`1.0`. Lower = more see-through. Recommended `0.55`–`0.85`. |
 | `OVERLAY_ACCENT` | `"#ffffff"` | Border color. |
 | `OVERLAY_BORDER_WIDTH` | `3` | Border thickness in pixels. |
-| `OVERLAY_ROUND` | `True` | Try Win11 rounded corners (no-op on Win10). |
+| `OVERLAY_CORNER_RADIUS` | `14` | Corner radius (px) of the rounded panel + border. |
 | `OVERLAY_WAVE_COLOR` | `"#ff6868"` | Live waveform polyline color while recording. |
 | `OVERLAY_TRANSCRIBING_TEXT` | `"Transcribing"` | Label shown during the transcribe phase (waveform is hidden then). |
 
