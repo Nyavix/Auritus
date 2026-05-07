@@ -125,11 +125,15 @@ import json
 import math
 import time
 import queue
+import shutil
 import struct
 import ctypes
 import tempfile
 import threading
 import traceback
+import subprocess
+import urllib.error
+import urllib.request
 import winsound
 from pathlib import Path
 
@@ -154,6 +158,7 @@ from faster_whisper import WhisperModel
 
 
 APP_NAME = "AriasSTT"
+__version__ = "0.2.1"  # bumped in CI on tag push; user visible via update flow
 LOG_PATH = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME / "ariasstt.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -200,6 +205,71 @@ def notify_force(title: str, message: str, timeout: int = 4) -> None:
         plyer_notification.notify(title=title, message=message, app_name=APP_NAME, timeout=timeout)
     except Exception as e:
         log(f"force-notify failed: {e}")
+
+
+# ---------------------------------------------------------------------
+# Auto-update via GitHub Releases (P9)
+# ---------------------------------------------------------------------
+# On launch, a background thread polls the GitHub Releases API for the latest
+# tag. If the tag is newer than __version__ and the release has an installer
+# asset, the tray menu surfaces an "Install update" item. Clicking it
+# downloads the installer and runs it silently; the installer's
+# CloseApplications=force replaces the running app and relaunches.
+
+UPDATE_REPO = "Nyavix/AriasSTT"
+UPDATE_CHECK_DELAY_S = 30        # let the app fully start before hitting the network
+UPDATE_API_TIMEOUT_S = 10
+UPDATE_DOWNLOAD_TIMEOUT_S = 600  # installer can be ~100 MB on slow connections
+_UPDATE_USER_AGENT = f"AriasSTT/{__version__} (+https://github.com/{UPDATE_REPO})"
+
+
+def _parse_version(s: str) -> tuple[int, ...]:
+    """'v0.2.1' or '0.2.1' -> (0, 2, 1). Stops at the first non-numeric piece
+    so '1.0.0-rc1' parses as (1, 0) -- pre-release tags compare as older
+    than a numeric-only release of the same prefix."""
+    s = (s or "").strip().lstrip("vV")
+    out: list[int] = []
+    for piece in s.split("."):
+        if not piece.isdigit():
+            break
+        out.append(int(piece))
+    return tuple(out) if out else (0,)
+
+
+def check_for_update() -> tuple[str, str] | None:
+    """Hit GitHub Releases /latest and return (tag, installer_url) if a newer
+    version is available. Returns None on any failure (offline, 404, no
+    matching asset, already up to date)."""
+    url = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _UPDATE_USER_AGENT,
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=UPDATE_API_TIMEOUT_S) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    tag = data.get("tag_name", "")
+    latest = _parse_version(tag)
+    current = _parse_version(__version__)
+    if latest <= current:
+        return None
+    for asset in data.get("assets", []) or []:
+        name = asset.get("name", "")
+        if name.startswith("AriasSTT-Setup") and name.endswith(".exe"):
+            url = asset.get("browser_download_url")
+            if url:
+                return tag.lstrip("vV"), url
+    return None
+
+
+def download_installer(url: str, dest_path: str) -> None:
+    """Stream an installer from `url` to `dest_path`."""
+    req = urllib.request.Request(url, headers={"User-Agent": _UPDATE_USER_AGENT})
+    with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT_S) as resp, \
+         open(dest_path, "wb") as f:
+        shutil.copyfileobj(resp, f, length=64 * 1024)
 
 
 # ---------------------------------------------------------------------
@@ -1397,6 +1467,11 @@ class DictateApp:
         self._max_record_timer: threading.Timer | None = None
         self._timer_lock = threading.Lock()
 
+        # Auto-update state. Populated by the background check; consumed by
+        # the tray "Install update..." menu item.
+        self._pending_update: tuple[str, str] | None = None  # (version, installer_url)
+        self._update_in_flight: bool = False
+
     def _save_config(self) -> None:
         save_user_config({
             "model":  self.current_model,
@@ -1601,6 +1676,107 @@ class DictateApp:
         threading.Thread(
             target=self._do_test_hotkey, daemon=True, name="hotkey-test"
         ).start()
+
+    # -- auto-update -------------------------------------------------
+
+    def _start_update_check(self) -> None:
+        """Schedule a one-shot background check after the app has settled.
+
+        Only runs when bundled (sys.frozen). Skipped in dev so we don't
+        nag ourselves with prompts to install over our own venv setup.
+        """
+        if not getattr(sys, "frozen", False):
+            log("Update check skipped: running unfrozen (dev mode).")
+            return
+        timer = threading.Timer(UPDATE_CHECK_DELAY_S, self._check_update_worker)
+        timer.daemon = True
+        timer.start()
+
+    def _check_update_worker(self) -> None:
+        try:
+            result = check_for_update()
+        except urllib.error.URLError as e:
+            log(f"Update check: network error: {e}")
+            return
+        except Exception as e:
+            log(f"Update check failed: {e}\n{traceback.format_exc()}")
+            return
+        if result is None:
+            log(f"Update check: up to date (current v{__version__}).")
+            return
+        version, url = result
+        self._pending_update = (version, url)
+        log(f"Update available: v{version} -> {url}")
+        if self.icon is not None:
+            try:
+                self.icon.update_menu()
+            except Exception:
+                pass
+        notify_force(APP_NAME, f"Update available: v{version}. Tray menu → Install update.")
+
+    def install_update(self) -> None:
+        """Tray callback: download the latest installer and run it silently."""
+        if self._pending_update is None or self._update_in_flight:
+            return
+        with self._state_lock:
+            if self.state != self.STATE_IDLE:
+                notify_error(APP_NAME, "Finish current dictation before updating.")
+                return
+        self._update_in_flight = True
+        if self.icon is not None:
+            try:
+                self.icon.update_menu()
+            except Exception:
+                pass
+        threading.Thread(
+            target=self._do_install_update, daemon=True, name="update-install",
+        ).start()
+
+    def _do_install_update(self) -> None:
+        assert self._pending_update is not None
+        version, url = self._pending_update
+        try:
+            notify_force(APP_NAME, f"Downloading update v{version}...", timeout=3)
+            log(f"Downloading update v{version} from {url}")
+            tmp_dir = tempfile.gettempdir()
+            installer_path = os.path.join(
+                tmp_dir, f"AriasSTT-Setup-v{version}.exe",
+            )
+            download_installer(url, installer_path)
+            log(f"Installer downloaded: {installer_path}")
+            notify_force(
+                APP_NAME,
+                f"Installing v{version}. App will restart.",
+                timeout=4,
+            )
+            time.sleep(1.0)
+            # /SILENT shows progress without prompts; /SUPPRESSMSGBOXES auto-OKs
+            # any dialogs; /CLOSEAPPLICATIONS lets installer kill us;
+            # /RESTARTAPPLICATIONS relaunches the new exe after install.
+            subprocess.Popen(
+                [
+                    installer_path,
+                    "/SILENT",
+                    "/SUPPRESSMSGBOXES",
+                    "/CLOSEAPPLICATIONS",
+                    "/RESTARTAPPLICATIONS",
+                ],
+                creationflags=getattr(subprocess, "DETACHED_PROCESS", 0),
+                close_fds=True,
+            )
+            # Don't quit ourselves -- the installer's CloseApplications handler
+            # will close us cleanly. Sleep a moment to give it the handle.
+            time.sleep(2.0)
+        except Exception as e:
+            log(f"Update install failed: {e}\n{traceback.format_exc()}")
+            notify_error(APP_NAME, f"Update failed: {e}")
+        finally:
+            self._update_in_flight = False
+            if self.icon is not None:
+                try:
+                    self.icon.update_menu()
+                except Exception:
+                    pass
 
     def _do_test_hotkey(self) -> None:
         spec = self.current_hotkey
@@ -1922,6 +2098,20 @@ class DictateApp:
                 lambda icon, item: os.startfile(str(LOG_PATH.parent)),
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                lambda item: (
+                    f"⬇ Installing v{self._pending_update[0]}..."
+                    if self._update_in_flight and self._pending_update
+                    else (
+                        f"⬇ Install update v{self._pending_update[0]}"
+                        if self._pending_update
+                        else "Update"
+                    )
+                ),
+                lambda icon, item: self.install_update(),
+                visible=lambda item: self._pending_update is not None,
+                enabled=lambda item: not self._update_in_flight,
+            ),
             pystray.MenuItem("Quit", lambda icon, item: self.quit()),
         )
 
@@ -1979,6 +2169,8 @@ class DictateApp:
         )
         # Reflect actual listener state in the tooltip (P5).
         self._refresh_tooltip()
+        # Kick off the GitHub Releases poll (skipped in dev / unfrozen).
+        self._start_update_check()
         self.icon.run()
         log(f"=== {APP_NAME} stopped ===")
 

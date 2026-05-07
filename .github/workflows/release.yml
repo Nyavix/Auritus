@@ -1,0 +1,88 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # needed by softprops/action-gh-release to upload assets
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      - name: Sync version constants with tag
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v',''
+          Write-Host "Tag = $tag, version = $version"
+          (Get-Content dictate.py)   -replace '__version__\s*=\s*"[^"]+"', "__version__ = ""$version""" | Set-Content dictate.py
+          (Get-Content installer.iss) -replace '#define\s+MyAppVersion\s+"[^"]+"', "#define MyAppVersion    ""$version""" | Set-Content installer.iss
+          Write-Host "--- dictate.py version line ---"
+          Select-String -Path dictate.py -Pattern '__version__'
+          Write-Host "--- installer.iss MyAppVersion line ---"
+          Select-String -Path installer.iss -Pattern 'MyAppVersion'
+
+      - name: Bundle with PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean AriasSTT.spec
+
+      - name: Verify bundle
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\AriasSTT\AriasSTT.exe")) {
+            Write-Error "Bundle missing"
+            exit 1
+          }
+          $sizeMB = [math]::Round((Get-ChildItem -Recurse "dist\AriasSTT" | Measure-Object -Sum Length).Sum / 1MB, 1)
+          Write-Host "Bundle size: $sizeMB MB"
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            $iscc = "C:\Program Files\Inno Setup 6\ISCC.exe"
+          }
+          if (-not (Test-Path $iscc)) {
+            Write-Error "ISCC.exe not found after choco install"
+            exit 1
+          }
+          & $iscc installer.iss
+
+      - name: List installer output
+        shell: pwsh
+        run: Get-ChildItem installer-output
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer-output/AriasSTT-Setup-v*.exe
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
