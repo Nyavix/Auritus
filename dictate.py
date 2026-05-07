@@ -82,18 +82,23 @@ OVERLAY_MARGIN = 40
 
 # --- Overlay visual customization (P6) ---------------------------------
 # Pixel size of the floating overlay. Width drives waveform resolution.
-OVERLAY_WIDTH = 360
-OVERLAY_HEIGHT = 76
+OVERLAY_WIDTH = 220
+OVERLAY_HEIGHT = 48
 
-# Try to apply Win11 acrylic / mica backdrop. Falls back to a solid dark
-# panel on older Windows or if the DWM call fails.
-OVERLAY_GLASS = True
+# Panel fill (the "almost black" color behind the waveform).
+OVERLAY_FILL_COLOR = "#0a0a0a"
+
+# Window-wide opacity, 0.0 (invisible) to 1.0 (fully opaque). The whole panel
+# fades together (border, waveform, text) -- this is what gives the
+# see-through look. Recommended range: 0.55 - 0.85.
+OVERLAY_OPACITY = 0.7
+
+# Border color + thickness. White 3px is the default.
+OVERLAY_ACCENT = "#ffffff"
+OVERLAY_BORDER_WIDTH = 3
 
 # Try to apply Win11 rounded corners. Silently no-ops on Win10 and below.
 OVERLAY_ROUND = True
-
-# Border + accent color (used for the 1px outline and the recording dot).
-OVERLAY_ACCENT = "#5cc8ff"
 
 # Waveform polyline color while recording.
 OVERLAY_WAVE_COLOR = "#ff6868"
@@ -101,9 +106,6 @@ OVERLAY_WAVE_COLOR = "#ff6868"
 # Status text shown in the transcribing state. Recording state intentionally
 # shows no label -- the waveform is the indicator.
 OVERLAY_TRANSCRIBING_TEXT = "Transcribing"
-
-# Solid panel color used when DWM acrylic is unavailable.
-OVERLAY_PANEL_FALLBACK = "#0d1014"
 
 # Models selectable from the tray menu. Smaller = faster, less accurate.
 # Order matters: this is how they appear in the menu.
@@ -339,12 +341,9 @@ def probe_hotkey_conflict(spec: str) -> tuple[bool, str]:
 # best-effort: failures fall through silently and the overlay degrades to a
 # solid dark panel with sharp corners.
 
-_DWMWA_USE_IMMERSIVE_DARK_MODE = 20      # bool — flips DWM to dark theme
 _DWMWA_WINDOW_CORNER_PREFERENCE = 33     # int  — 0=default 1=donotround 2=round 3=roundsmall
-_DWMWA_SYSTEMBACKDROP_TYPE = 38          # int  — 1=auto 2=mainwindow(mica) 3=transientwindow(acrylic) 4=tabbedwindow
 
 _DWMWCP_ROUND = 2
-_DWMSBT_TRANSIENTWINDOW = 3
 
 
 def _dwm_set_attribute(hwnd: int, attr: int, value: int) -> bool:
@@ -360,15 +359,6 @@ def _dwm_set_attribute(hwnd: int, attr: int, value: int) -> bool:
     except Exception as e:
         log(f"DwmSetWindowAttribute({attr}) failed: {e}")
         return False
-
-
-def _dwm_apply_acrylic(hwnd: int) -> bool:
-    """Try to enable Win11 transient acrylic backdrop. Sets dark mode hint
-    so the system uses dark acrylic instead of light. Returns True on
-    success."""
-    dark_ok = _dwm_set_attribute(hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE, 1)
-    glass_ok = _dwm_set_attribute(hwnd, _DWMWA_SYSTEMBACKDROP_TYPE, _DWMSBT_TRANSIENTWINDOW)
-    return glass_ok and dark_ok
 
 
 def _dwm_apply_rounded(hwnd: int) -> bool:
@@ -544,7 +534,6 @@ class RecordingOverlay:
     audio stream has stopped).
     """
 
-    BG_KEY = "#010203"          # transparent-color magic key (matches root + canvas bg)
     TEXT_COLOR = "#e8eef5"
     DOT_RECORDING = "#ff6868"
     DOT_TRANSCRIBING = "#f0c85a"
@@ -560,12 +549,10 @@ class RecordingOverlay:
         self._dot_id: int = 0
         self._text_id: int = 0
         self._border_id: int = 0
-        self._panel_bg_id: int = 0
         self._state: str = "recording"
         self._visible: bool = False
         self._poll_handle = None
         self._pulse_phase: float = 0.0
-        self._glass_ok: bool = False
         self._fx_applied: bool = False
         self._wave_points: int = 0
         self._wave_x0: int = 0
@@ -589,35 +576,44 @@ class RecordingOverlay:
             root.attributes("-topmost", True)
             root.geometry(f"{OVERLAY_WIDTH}x{OVERLAY_HEIGHT}")
             root.resizable(False, False)
-            root.configure(bg=self.BG_KEY)
+            root.configure(bg=OVERLAY_FILL_COLOR)
+            # Global window alpha gives the see-through-but-dark look. Border
+            # and waveform fade with the background so the whole panel feels
+            # like a single translucent surface.
+            try:
+                root.attributes("-alpha", float(OVERLAY_OPACITY))
+            except Exception as e:
+                log(f"overlay alpha failed: {e}")
 
             canvas = tk.Canvas(
                 root,
                 width=OVERLAY_WIDTH, height=OVERLAY_HEIGHT,
-                bg=self.BG_KEY,
+                bg=OVERLAY_FILL_COLOR,
                 highlightthickness=0, borderwidth=0,
             )
             canvas.pack(fill="both", expand=True)
 
-            # Solid panel rectangle -- only painted if DWM acrylic falls through.
-            self._panel_bg_id = canvas.create_rectangle(
-                0, 0, OVERLAY_WIDTH, OVERLAY_HEIGHT,
-                fill="", outline="", width=0,
-            )
-            # 1px accent border, inset 0.5 so it renders crisp.
+            # Border: rectangle outline. Inset by half the stroke width so the
+            # border draws fully inside the panel instead of clipping at the
+            # window edge.
+            inset = max(1, OVERLAY_BORDER_WIDTH // 2)
             self._border_id = canvas.create_rectangle(
-                1, 1, OVERLAY_WIDTH - 1, OVERLAY_HEIGHT - 1,
-                outline=OVERLAY_ACCENT, width=1,
+                inset, inset,
+                OVERLAY_WIDTH - inset, OVERLAY_HEIGHT - inset,
+                outline=OVERLAY_ACCENT, width=OVERLAY_BORDER_WIDTH,
             )
-            # Status dot (top-left area).
+            # Status dot near the left edge.
+            dot_r = max(3, OVERLAY_HEIGHT // 10)
+            dot_cx = OVERLAY_BORDER_WIDTH + 6 + dot_r
+            dot_cy = OVERLAY_HEIGHT // 2
             self._dot_id = canvas.create_oval(
-                14, OVERLAY_HEIGHT // 2 - 4,
-                22, OVERLAY_HEIGHT // 2 + 4,
+                dot_cx - dot_r, dot_cy - dot_r,
+                dot_cx + dot_r, dot_cy + dot_r,
                 fill=self.DOT_RECORDING, outline="",
             )
-            # Waveform line area: from just right of dot to just before edge.
-            self._wave_x0 = 32
-            self._wave_x1 = OVERLAY_WIDTH - 16
+            # Waveform spans from just right of the dot to just before the right border.
+            self._wave_x0 = dot_cx + dot_r + 6
+            self._wave_x1 = OVERLAY_WIDTH - OVERLAY_BORDER_WIDTH - 6
             self._wave_points = max(20, (self._wave_x1 - self._wave_x0) // 3)
             cy = OVERLAY_HEIGHT // 2
             flat = []
@@ -628,11 +624,11 @@ class RecordingOverlay:
                 *flat,
                 fill=OVERLAY_WAVE_COLOR, width=2, smooth=True, capstyle="round",
             )
-            # Centered status text (used for transcribing).
+            # Centered status text (used for transcribing state).
             self._text_id = canvas.create_text(
                 OVERLAY_WIDTH // 2, OVERLAY_HEIGHT // 2,
                 text="", fill=self.TEXT_COLOR,
-                font=("Segoe UI", 12, "bold"),
+                font=("Segoe UI", 11, "bold"),
             )
 
             self._canvas = canvas
@@ -734,41 +730,17 @@ class RecordingOverlay:
         self._root.geometry(f"{ww}x{wh}+{x}+{y}")
 
     def _apply_window_effects(self) -> None:
-        """Try DWM acrylic + rounded corners. On failure, fall back to a
-        solid dark panel so the overlay is still legible."""
+        """Apply Win11 rounded corners (best-effort, no-op on Win10)."""
+        if not OVERLAY_ROUND:
+            return
         try:
             inner = self._root.winfo_id()
             top = ctypes.windll.user32.GetParent(inner)
             hwnd = top if top else inner
         except Exception as e:
             log(f"overlay HWND lookup failed: {e}")
-            self._fallback_panel()
             return
-
-        if OVERLAY_ROUND:
-            _dwm_apply_rounded(hwnd)
-
-        glass = _dwm_apply_acrylic(hwnd) if OVERLAY_GLASS else False
-        self._glass_ok = glass
-
-        if glass:
-            try:
-                self._root.attributes("-transparentcolor", self.BG_KEY)
-            except Exception as e:
-                log(f"overlay transparentcolor failed: {e}")
-                self._fallback_panel()
-        else:
-            self._fallback_panel()
-
-    def _fallback_panel(self) -> None:
-        """Solid dark fill behind canvas content when acrylic is unavailable."""
-        if self._canvas is None:
-            return
-        self._canvas.itemconfigure(self._panel_bg_id, fill=OVERLAY_PANEL_FALLBACK)
-        try:
-            self._root.attributes("-alpha", 0.94)
-        except Exception:
-            pass
+        _dwm_apply_rounded(hwnd)
 
     # -- per-frame draw ---------------------------------------------------
 
