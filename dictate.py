@@ -1555,7 +1555,12 @@ class DictateApp:
             # no Vulkan device, model file download failure, etc.).
             # Explicit "gpu" propagates the error so the user sees what's
             # wrong instead of silently switching.
-            if self.current_backend == "auto" and isinstance(self.backend, WhisperCppBackend):
+            gpu_missing = not self._gpu_supported  # binary absent — not a user error
+            if isinstance(self.backend, WhisperCppBackend) and (
+                self.current_backend == "auto" or gpu_missing
+            ):
+                if gpu_missing:
+                    notify_error(APP_NAME, "GPU binary not found — using CPU backend.")
                 log(f"GPU load failed, falling back to CPU: {e}")
                 try:
                     self.backend.unload()
