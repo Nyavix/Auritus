@@ -70,9 +70,12 @@ jobs:
         if: steps.cache-whisper-cpp.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          $sdk = $env:VULKAN_SDK
           cmake -S third_party/whisper.cpp -B third_party/whisper.cpp/build `
             -DGGML_VULKAN=1 -DWHISPER_BUILD_SERVER=ON `
-            -DCMAKE_BUILD_TYPE=Release -A x64
+            -DCMAKE_BUILD_TYPE=Release -A x64 `
+            -DVulkan_LIBRARY="$sdk/Lib/vulkan-1.lib" `
+            -DVulkan_INCLUDE_DIR="$sdk/Include"
           cmake --build third_party/whisper.cpp/build --config Release -j
 
       - name: Copy whisper-server to vendor
