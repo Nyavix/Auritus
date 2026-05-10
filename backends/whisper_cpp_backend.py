@@ -1,0 +1,364 @@
+"""
+whisper.cpp backend.
+
+Spawns a bundled ``whisper-server.exe`` (built with ``-DGGML_VULKAN=1``)
+on a free localhost port, keeps it alive for the lifetime of the
+backend, and POSTs WAV-encoded audio to ``/inference`` per
+transcription.
+
+The Vulkan-built binary works on AMD, NVIDIA, and Intel GPUs without
+vendor SDKs (the Vulkan loader ships with modern GPU drivers).  If the
+binary fails to start because no Vulkan device is present, ``load()``
+raises and ``DictateApp`` falls back to the CPU backend.
+
+GGUF model files (``ggml-*.bin``) are downloaded on first use to
+``%LOCALAPPDATA%\\AriasSTT\\models\\`` -- separate from the
+faster-whisper / HuggingFace cache used by the CPU backend.  Both
+backends can coexist and share nothing.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+
+import numpy as np
+from scipy.io import wavfile
+
+from .base import Backend, LogFn
+
+
+# AriasSTT model name -> whisper.cpp GGUF filename.
+MODEL_FILE_MAP: dict[str, str] = {
+    "tiny.en":   "ggml-tiny.en.bin",
+    "base.en":   "ggml-base.en.bin",
+    "small.en":  "ggml-small.en.bin",
+    "medium.en": "ggml-medium.en.bin",
+    "large-v3":  "ggml-large-v3.bin",
+}
+
+HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
+
+# Server boot watchdog.  Vulkan device enumeration + model load on
+# medium.en takes ~5-15 s on a typical AMD GPU.  Larger models on slower
+# machines need more headroom.
+SERVER_BOOT_TIMEOUT_S = 60.0
+
+
+# ----------------------------------------------------------------------
+# Path resolution
+# ----------------------------------------------------------------------
+
+def _vendor_dir() -> Path:
+    """Return the directory that holds whisper-server.exe and its DLLs.
+
+    In the PyInstaller bundle the binaries are unpacked under
+    ``sys._MEIPASS/vendor/whisper-cpp/``.  In a dev checkout they live
+    in ``vendor/whisper-cpp/`` next to ``dictate.py``.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base = Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    else:
+        # backends/whisper_cpp_backend.py -> repo root
+        base = Path(__file__).resolve().parent.parent
+    return base / "vendor" / "whisper-cpp"
+
+
+def _server_path() -> Path:
+    return _vendor_dir() / "whisper-server.exe"
+
+
+def _models_dir() -> Path:
+    appdata = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    p = Path(appdata) / "AriasSTT" / "models"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _free_localhost_port() -> int:
+    """Ask the OS for a free TCP port, then immediately release it.
+
+    Tiny race window between bind/close and the server's bind, but in
+    practice this is the standard trick for picking an ephemeral port
+    and is good enough for a single-user desktop app.
+    """
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+# ----------------------------------------------------------------------
+# Backend
+# ----------------------------------------------------------------------
+
+class WhisperCppBackend(Backend):
+    name = "gpu"
+    label = "GPU (whisper.cpp Vulkan)"
+
+    def __init__(self, log: LogFn | None = None) -> None:
+        self._log = log or (lambda _msg: None)
+        self.proc: subprocess.Popen | None = None
+        self.port: int | None = None
+        self.model_name: str | None = None
+        self._stderr_tail: str = ""
+
+    # ------------------------------------------------------------------
+    # Availability
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def available(cls) -> tuple[bool, str]:
+        if sys.platform != "win32":
+            return False, "Windows-only build"
+        srv = _server_path()
+        if not srv.exists():
+            return False, f"whisper-server.exe missing (expected at {srv})"
+        return True, ""
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def _ensure_model_file(self, model_name: str) -> Path:
+        fname = MODEL_FILE_MAP.get(model_name)
+        if fname is None:
+            raise ValueError(f"WhisperCppBackend: unsupported model {model_name!r}")
+        path = _models_dir() / fname
+        if path.exists() and path.stat().st_size > 0:
+            return path
+
+        url = HF_BASE + fname
+        self._log(f"[backend:gpu] Downloading {fname} from HuggingFace ...")
+        tmp = path.with_suffix(path.suffix + ".part")
+        try:
+            with urllib.request.urlopen(url, timeout=60) as resp, tmp.open("wb") as f:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+            tmp.replace(path)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            raise
+        self._log(f"[backend:gpu] Saved model to {path}")
+        return path
+
+    def load(self, model_name: str) -> None:
+        # Always start clean -- whisper-server has no /load endpoint, so
+        # swapping models means restarting the process.
+        self.unload()
+
+        ok, reason = self.available()
+        if not ok:
+            raise RuntimeError(f"WhisperCppBackend not available: {reason}")
+
+        model_path = self._ensure_model_file(model_name)
+        port = _free_localhost_port()
+        cmd = [
+            str(_server_path()),
+            "--model",      str(model_path),
+            "--host",       "127.0.0.1",
+            "--port",       str(port),
+            "--no-timestamps",
+            "--threads",    "4",
+        ]
+        self._log(f"[backend:gpu] Spawning whisper-server on :{port} with {model_name}")
+
+        creationflags = 0
+        if sys.platform == "win32":
+            # CREATE_NO_WINDOW: keep the server console hidden when AriasSTT
+            # itself runs under pythonw / a windowed PyInstaller bundle.
+            creationflags = 0x08000000  # subprocess.CREATE_NO_WINDOW
+
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+                creationflags=creationflags,
+                cwd=str(_vendor_dir()),  # so the loader finds sibling DLLs
+            )
+        except FileNotFoundError as e:
+            raise RuntimeError(f"whisper-server.exe failed to launch: {e}") from e
+
+        self.port = port
+        try:
+            self._wait_ready()
+        except Exception:
+            self.unload()
+            raise
+
+        self.model_name = model_name
+        self._log(f"[backend:gpu] whisper-server ready on :{port}")
+
+    def _wait_ready(self) -> None:
+        """Poll the server's HTTP root until it responds, with a hard cap."""
+        if self.proc is None or self.port is None:
+            raise RuntimeError("whisper-server: no process to wait on")
+
+        deadline = time.time() + SERVER_BOOT_TIMEOUT_S
+        url = f"http://127.0.0.1:{self.port}/"
+
+        while time.time() < deadline:
+            # Did the server die while we were waiting?
+            rc = self.proc.poll()
+            if rc is not None:
+                err = self._read_stderr_tail()
+                raise RuntimeError(
+                    f"whisper-server exited with code {rc} during startup. "
+                    f"Tail: {err[-400:] if err else '(empty)'}"
+                )
+
+            try:
+                with urllib.request.urlopen(url, timeout=0.5) as resp:
+                    # Any response (200 or 404 from a route we didn't ask for)
+                    # means the HTTP listener is up.
+                    resp.read()
+                    return
+            except urllib.error.URLError:
+                time.sleep(0.25)
+            except Exception:
+                time.sleep(0.25)
+
+        err = self._read_stderr_tail()
+        raise TimeoutError(
+            f"whisper-server did not become ready in {SERVER_BOOT_TIMEOUT_S:.0f}s. "
+            f"Tail: {err[-400:] if err else '(empty)'}"
+        )
+
+    def _read_stderr_tail(self) -> str:
+        """Drain whatever stderr is buffered without blocking forever.
+
+        The server has already exited (caller checks ``poll()``) before
+        we get here, so the read returns immediately.  We cache the
+        result so a follow-up ``unload()`` call still has something to
+        log.
+        """
+        if self.proc is None or self.proc.stderr is None:
+            return self._stderr_tail
+        try:
+            data = self.proc.stderr.read() or b""
+        except Exception:
+            data = b""
+        if data:
+            self._stderr_tail += data.decode("utf-8", "replace")
+        return self._stderr_tail
+
+    # ------------------------------------------------------------------
+    # Inference
+    # ------------------------------------------------------------------
+
+    def transcribe(self, audio: np.ndarray) -> str:
+        if self.proc is None or self.port is None:
+            raise RuntimeError("WhisperCppBackend.transcribe called before load()")
+        if self.proc.poll() is not None:
+            raise RuntimeError(
+                f"whisper-server died (exit {self.proc.returncode}). "
+                f"Tail: {self._read_stderr_tail()[-400:]}"
+            )
+
+        # whisper.cpp expects 16-bit PCM WAV at 16 kHz mono.  scipy's
+        # wavfile is part of the existing dep set, so use it instead of
+        # pulling in soundfile.
+        if audio.dtype != np.float32:
+            audio = audio.astype(np.float32)
+        pcm16 = np.clip(audio * 32767.0, -32768.0, 32767.0).astype(np.int16)
+        buf = io.BytesIO()
+        wavfile.write(buf, 16000, pcm16)
+        wav_bytes = buf.getvalue()
+
+        body, content_type = _build_multipart(
+            wav_bytes,
+            language="en" if self.model_name and self.model_name.endswith(".en") else "auto",
+        )
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}/inference",
+            data=body,
+            headers={"Content-Type": content_type},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=300) as resp:
+            payload = resp.read().decode("utf-8", "replace")
+
+        try:
+            return json.loads(payload).get("text", "").strip()
+        except json.JSONDecodeError:
+            return payload.strip()
+
+    # ------------------------------------------------------------------
+    # Teardown
+    # ------------------------------------------------------------------
+
+    def unload(self) -> None:
+        if self.proc is not None:
+            try:
+                if self.proc.poll() is None:
+                    self.proc.terminate()
+                    try:
+                        self.proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        self.proc.kill()
+                        try:
+                            self.proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+                self._read_stderr_tail()  # capture any final output
+            except Exception as e:
+                self._log(f"[backend:gpu] unload error: {e}")
+            finally:
+                self.proc = None
+        self.port = None
+        self.model_name = None
+
+
+# ----------------------------------------------------------------------
+# Multipart helper
+# ----------------------------------------------------------------------
+
+def _build_multipart(wav_bytes: bytes, *, language: str) -> tuple[bytes, str]:
+    """Hand-rolled multipart so we don't pull in `requests` for one POST."""
+    boundary = f"----AriasSTT-{uuid.uuid4().hex}"
+    crlf = b"\r\n"
+
+    def part_header(disposition: str) -> bytes:
+        return f"--{boundary}\r\n{disposition}\r\n\r\n".encode("utf-8")
+
+    chunks: list[bytes] = []
+    chunks.append(part_header(
+        'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+        'Content-Type: audio/wav'
+    ))
+    chunks.append(wav_bytes)
+    chunks.append(crlf)
+
+    fields = {
+        "temperature":     "0.0",
+        "response_format": "json",
+        "language":        language,
+    }
+    for k, v in fields.items():
+        chunks.append(part_header(f'Content-Disposition: form-data; name="{k}"'))
+        chunks.append(v.encode("utf-8"))
+        chunks.append(crlf)
+
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"

@@ -24,6 +24,12 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 tmp_ret = collect_all('PIL')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
+import glob
+from pathlib import Path
+_vendor = Path(SPECPATH) / "vendor" / "whisper-cpp"
+if _vendor.exists():
+    for _p in glob.glob(str(_vendor / "*.exe")) + glob.glob(str(_vendor / "*.dll")):
+        binaries.append((_p, "vendor/whisper-cpp"))
 
 a = Analysis(
     ['dictate.py'],

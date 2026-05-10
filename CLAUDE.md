@@ -5,11 +5,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Single-machine Windows tray app: push-to-talk Whisper dictation. Hotkey toggles
-recording → faster-whisper inference on **CPU** (target machine has an AMD GPU,
-so CUDA is not an option) → text is pasted into the focused window.
+recording → Whisper inference → text is pasted into the focused window.
 
-There is no test suite, no linter, no CI. The product is one Python file plus
-three batch scripts.
+Two inference backends coexist:
+
+- **CPU** (`faster-whisper` / CTranslate2) — always available. Default when no
+  GPU binary is present.
+- **GPU** (`whisper.cpp` Vulkan via `whisper-server.exe`) — Vulkan is
+  vendor-agnostic, so it works on AMD (target machine), NVIDIA, and Intel GPUs.
+  The `whisper-server.exe` binary is built by CI on tag and bundled into the
+  installer. Dev builds without the binary fall back to CPU automatically.
+
+"Auto" mode (default) picks GPU when `whisper-server.exe` is present and a
+Vulkan device is found; falls back to CPU otherwise.
+
+There is no test suite, no linter. CI is GitHub Actions (release pipeline only).
 
 ## Common commands
 
@@ -31,11 +41,37 @@ watch the log lines stream — there is no automated harness.
 
 ## Architecture
 
-`dictate.py` is the whole app. Top of file is a config block (HOTKEY,
-MODEL_SIZE, MIC_DEVICE, sound paths, overlay settings, MODEL_OPTIONS, etc.) —
-**always check the config block first** when changing user-visible behavior;
-many settings are intentionally module-level constants rather than buried in
-classes.
+`dictate.py` is the main app. Top of file is a config block (HOTKEY,
+MODEL_SIZE, MIC_DEVICE, sound paths, overlay settings, MODEL_OPTIONS,
+BACKEND, BACKEND_OPTIONS, etc.) — **always check the config block first**
+when changing user-visible behavior; many settings are intentionally
+module-level constants rather than buried in classes.
+
+### Backend abstraction (`backends/`)
+
+```
+backends/
+  __init__.py               # exports Backend, FasterWhisperBackend, WhisperCppBackend
+  base.py                   # Backend ABC: available() / load() / transcribe() / unload()
+  faster_whisper_backend.py # CPU path — wraps WhisperModel
+  whisper_cpp_backend.py    # GPU path — spawns whisper-server.exe subprocess, HTTP POST WAV
+```
+
+`DictateApp` holds `self.backend: Backend | None` (not `self.model`).
+`load_model()` calls `self.backend.load(name)`. `_transcribe()` calls
+`self.backend.transcribe(audio)`. `quit()` calls `self.backend.unload()`.
+
+`WhisperCppBackend`:
+- Resolves `whisper-server.exe` from `vendor/whisper-cpp/` (dev) or
+  `sys._MEIPASS/vendor/whisper-cpp/` (bundle).
+- Downloads GGUF models to `%LOCALAPPDATA%\AriasSTT\models\` on first use.
+- Spawns `whisper-server.exe` once per `load()` call; keeps it warm.
+- Encodes audio as 16-bit PCM WAV via `scipy.io.wavfile` and POSTs to
+  the server's `/inference` endpoint (no `requests` dep — stdlib only).
+
+Two model cache locations coexist independently:
+- CPU: `%USERPROFILE%\.cache\huggingface\hub` (CTranslate2 format)
+- GPU: `%LOCALAPPDATA%\AriasSTT\models\` (GGUF `.bin` format)
 
 ### Threading model (the part that catches you out)
 

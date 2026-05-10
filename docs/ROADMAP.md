@@ -12,6 +12,7 @@ fastest way to remember where we are and what's next.
 | ✅ | `v0.1.0` | First public source release. Tray app, hotkey rebind menu. |
 | ✅ | `v0.2.0` | Live waveform glass overlay, hotkey reliability suite (P0–P5), Codex/Gemini review fixes (P6–P8), first installable Inno Setup `.exe`. |
 | ✅ | `v0.2.1` | In-app auto-update via GitHub Releases polling. GitHub Actions release pipeline (tag → build → upload, hands-off). |
+| 🚧 | `v0.3.0` | GPU acceleration via whisper.cpp Vulkan. Auto-detect GPU; falls back to CPU. Backend tray submenu. CI builds `whisper-server.exe` on tag. |
 
 **Repo:** https://github.com/Nyavix/AriasSTT
 **Latest installer:** https://github.com/Nyavix/AriasSTT/releases/latest

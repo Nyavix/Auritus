@@ -69,6 +69,16 @@ if errorlevel 1 (
 )
 
 echo.
+echo [6/6] Checking for whisper.cpp GPU binary ...
+if not exist "vendor\whisper-cpp\whisper-server.exe" (
+    echo [NOTICE] vendor\whisper-cpp\whisper-server.exe not found.
+    echo          GPU backend will be unavailable until a CI release build
+    echo          adds the binary. CPU backend works without it.
+) else (
+    echo         whisper-server.exe present - GPU backend available.
+)
+
+echo.
 echo === Setup complete ===
 echo.
 echo Run the app:        pythonw dictate.py    (no console window)

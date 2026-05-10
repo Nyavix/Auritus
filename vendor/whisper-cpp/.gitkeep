@@ -1,0 +1,11 @@
+# whisper.cpp Vulkan Windows binaries are dropped here by the release CI
+# step (see .github/workflows/release.yml).  Local dev: see setup.bat.
+#
+# Expected files when the GPU backend is enabled:
+#   whisper-server.exe
+#   ggml.dll
+#   ggml-base.dll
+#   ggml-cpu.dll
+#   ggml-vulkan.dll
+#   whisper.dll
+#   (plus any other DLLs whisper.cpp's Vulkan build emits)

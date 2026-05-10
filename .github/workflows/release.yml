@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+env:
+  WHISPER_CPP_TAG: v1.8.4
+
 permissions:
   contents: write   # needed by softprops/action-gh-release to upload assets
 
@@ -42,6 +45,46 @@ jobs:
           Select-String -Path dictate.py -Pattern '__version__'
           Write-Host "--- installer.iss MyAppVersion line ---"
           Select-String -Path installer.iss -Pattern 'MyAppVersion'
+
+      - name: Cache whisper.cpp Vulkan build
+        id: cache-whisper-cpp
+        uses: actions/cache@v4
+        with:
+          path: vendor/whisper-cpp
+          key: whisper-cpp-vulkan-${{ env.WHISPER_CPP_TAG }}-windows-x64
+
+      - name: Install Vulkan SDK
+        if: steps.cache-whisper-cpp.outputs.cache-hit != 'true'
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: latest
+          cache: true
+
+      - name: Clone whisper.cpp
+        if: steps.cache-whisper-cpp.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch $env:WHISPER_CPP_TAG https://github.com/ggerganov/whisper.cpp third_party/whisper.cpp
+
+      - name: Build whisper-server (Vulkan)
+        if: steps.cache-whisper-cpp.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          cmake -S third_party/whisper.cpp -B third_party/whisper.cpp/build `
+            -DGGML_VULKAN=1 -DWHISPER_BUILD_SERVER=ON `
+            -DCMAKE_BUILD_TYPE=Release -A x64
+          cmake --build third_party/whisper.cpp/build --config Release -j
+
+      - name: Copy whisper-server to vendor
+        if: steps.cache-whisper-cpp.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path vendor/whisper-cpp | Out-Null
+          Copy-Item third_party/whisper.cpp/build/bin/Release/whisper-server.exe vendor/whisper-cpp/
+          Get-ChildItem third_party/whisper.cpp/build/bin/Release/*.dll -ErrorAction SilentlyContinue |
+            Copy-Item -Destination vendor/whisper-cpp/
+          Write-Host "vendor/whisper-cpp contents:"
+          Get-ChildItem vendor/whisper-cpp
 
       - name: Bundle with PyInstaller
         shell: pwsh

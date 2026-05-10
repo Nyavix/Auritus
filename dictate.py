@@ -115,6 +115,18 @@ MODEL_OPTIONS = ["tiny.en", "base.en", "small.en", "medium.en", "large-v3"]
 # Number of CPU threads for inference. 0 = let faster-whisper decide.
 CPU_THREADS = 0
 
+# Inference backend. Options:
+#   "auto" -- use GPU (whisper.cpp Vulkan) when available, else CPU.
+#   "gpu"  -- force whisper.cpp Vulkan. Errors loudly if no Vulkan device
+#             is found or the binary isn't bundled.
+#   "cpu"  -- force faster-whisper CPU (the original AriasSTT path).
+# After first run, the choice is editable from the tray "Backend" submenu
+# and persisted in config.json. This constant is only the initial value.
+BACKEND = "auto"
+
+# Valid BACKEND values, kept centralised for validation + the tray menu.
+BACKEND_OPTIONS = ["auto", "gpu", "cpu"]
+
 # =====================================================================
 
 import os
@@ -154,7 +166,7 @@ try:
 except Exception:
     plyer_notification = None
 
-from faster_whisper import WhisperModel
+from backends import Backend, FasterWhisperBackend, WhisperCppBackend
 
 
 APP_NAME = "AriasSTT"
@@ -1433,7 +1445,7 @@ class DictateApp:
         self.state = self.STATE_IDLE
         self._state_lock = threading.Lock()
         self.recorder = Recorder()
-        self.model: WhisperModel | None = None
+        self.backend: Backend | None = None
         self.icon: pystray.Icon | None = None
         self.overlay = RecordingOverlay(self.recorder) if SHOW_OVERLAY else None
         self._stop_event = threading.Event()
@@ -1448,6 +1460,21 @@ class DictateApp:
         if not is_valid_hotkey(self.current_hotkey):
             log(f"Persisted hotkey {self.current_hotkey!r} invalid; falling back to {HOTKEY}")
             self.current_hotkey = HOTKEY
+
+        # Inference backend choice. "auto" picks GPU when the bundled
+        # whisper.cpp Vulkan binary is present, otherwise CPU.
+        self.current_backend: str = cfg.get("backend", BACKEND)
+        if self.current_backend not in BACKEND_OPTIONS:
+            log(f"Persisted backend {self.current_backend!r} not in BACKEND_OPTIONS; falling back to {BACKEND}")
+            self.current_backend = BACKEND
+
+        # Cache GPU availability once at startup so the tray menu can
+        # grey out the "GPU" item without re-probing on every rebuild.
+        # The probe is cheap (a path existence check); real Vulkan
+        # device enumeration happens inside whisper-server at load().
+        self._gpu_supported, self._gpu_unavailable_reason = WhisperCppBackend.available()
+        if not self._gpu_supported:
+            log(f"GPU backend unavailable: {self._gpu_unavailable_reason}")
 
         # P2: trigger mode -- "toggle" (press to start, press to stop) or
         # "hold" (press-and-hold to record, release to stop).
@@ -1474,22 +1501,73 @@ class DictateApp:
 
     def _save_config(self) -> None:
         save_user_config({
-            "model":  self.current_model,
-            "hotkey": self.current_hotkey,
-            "mode":   self.current_mode,
+            "model":   self.current_model,
+            "hotkey":  self.current_hotkey,
+            "mode":    self.current_mode,
+            "backend": self.current_backend,
         })
 
     # -- model -------------------------------------------------------
 
+    def _resolve_backend_class(self) -> type[Backend]:
+        """Map ``self.current_backend`` ("auto"/"gpu"/"cpu") to a concrete
+        backend class. Auto picks GPU when the bundled binary is present.
+        """
+        if self.current_backend == "cpu":
+            return FasterWhisperBackend
+        if self.current_backend == "gpu":
+            return WhisperCppBackend
+        # "auto"
+        return WhisperCppBackend if self._gpu_supported else FasterWhisperBackend
+
+    def _instantiate_backend(self, cls: type[Backend]) -> Backend:
+        if cls is FasterWhisperBackend:
+            return FasterWhisperBackend(
+                compute_type=COMPUTE_TYPE,
+                cpu_threads=CPU_THREADS,
+                log=log,
+            )
+        if cls is WhisperCppBackend:
+            return WhisperCppBackend(log=log)
+        raise ValueError(f"Unknown backend class: {cls!r}")
+
     def load_model(self, name: str | None = None) -> None:
         target = name or self.current_model
-        log(f"Loading model {target} ({COMPUTE_TYPE}) ...")
-        kwargs = dict(device="cpu", compute_type=COMPUTE_TYPE)
-        if CPU_THREADS > 0:
-            kwargs["cpu_threads"] = CPU_THREADS
-        self.model = WhisperModel(target, **kwargs)
+        desired_cls = self._resolve_backend_class()
+
+        # Reuse the existing backend if it's the right type; otherwise
+        # tear it down and build a new one. Reusing matters for the CPU
+        # path (CTranslate2 holds native memory) and for the GPU path
+        # (we'd otherwise spawn whisper-server twice in quick succession).
+        if self.backend is None or not isinstance(self.backend, desired_cls):
+            if self.backend is not None:
+                try:
+                    self.backend.unload()
+                except Exception as e:
+                    log(f"Previous backend unload error (ignored): {e}")
+            self.backend = self._instantiate_backend(desired_cls)
+
+        log(f"Loading model {target} on {self.backend.label} ...")
+        try:
+            self.backend.load(target)
+        except Exception as e:
+            # Auto-mode falls back to CPU if GPU load fails (driver issue,
+            # no Vulkan device, model file download failure, etc.).
+            # Explicit "gpu" propagates the error so the user sees what's
+            # wrong instead of silently switching.
+            if self.current_backend == "auto" and isinstance(self.backend, WhisperCppBackend):
+                log(f"GPU load failed, falling back to CPU: {e}")
+                try:
+                    self.backend.unload()
+                except Exception:
+                    pass
+                self.backend = self._instantiate_backend(FasterWhisperBackend)
+                self.backend.load(target)
+            else:
+                raise
+
         self.current_model = target
-        log(f"Model {target} loaded.")
+        log(f"Model {target} loaded on {self.backend.label}.")
 
     def set_model(self, name: str) -> None:
         """Tray callback: switch model on a background thread."""
@@ -1509,6 +1587,32 @@ class DictateApp:
             except Exception:
                 pass
         threading.Thread(target=self._reload_model, args=(name,), daemon=True).start()
+
+    def set_backend(self, choice: str) -> None:
+        """Tray callback: switch inference backend on a background thread.
+
+        Mirrors set_model's flow -- block during the swap, persist the
+        choice optimistically, then reload the current model under the
+        new backend on a worker thread.
+        """
+        if choice not in BACKEND_OPTIONS or choice == self.current_backend:
+            return
+        if choice == "gpu" and not self._gpu_supported:
+            notify_error(APP_NAME, f"GPU backend unavailable: {self._gpu_unavailable_reason}")
+            return
+        with self._state_lock:
+            if self.state != self.STATE_IDLE:
+                notify_error(APP_NAME, "Finish current dictation before switching backends.")
+                return
+            self.state = self.STATE_BUSY
+        self.current_backend = choice
+        self._save_config()
+        if self.icon is not None:
+            try:
+                self.icon.update_menu()
+            except Exception:
+                pass
+        threading.Thread(target=self._reload_model, args=(self.current_model,), daemon=True).start()
 
     def _reload_model(self, name: str) -> None:
         self._set_icon(ICON_BUSY, f"{APP_NAME} - loading {name}...")
@@ -1997,23 +2101,12 @@ class DictateApp:
                 self.overlay.hide()
 
     def _transcribe(self, audio: np.ndarray) -> str:
-        # faster-whisper accepts a numpy float32 array at 16 kHz directly.
-        if audio.dtype != np.float32:
-            audio = audio.astype(np.float32)
-        # sounddevice float32 input is already in [-1, 1] -- Whisper handles
-        # quiet audio internally via vad_filter, so no extra normalization
-        # pass here. (The previous `audio / max(peak, 1.0)` was a no-op for
-        # any peak < 1.0, which is the typical case.)
-
-        segments, info = self.model.transcribe(
-            audio,
-            language="en" if self.current_model.endswith(".en") else None,
-            beam_size=1,
-            vad_filter=True,
-            without_timestamps=True,
-            condition_on_previous_text=False,
-        )
-        return " ".join(seg.text for seg in segments)
+        # The active backend handles dtype, VAD, and language selection
+        # internally -- callers just hand it the raw 16 kHz mono buffer
+        # produced by Recorder.stop().
+        if self.backend is None:
+            raise RuntimeError("_transcribe called before a backend was loaded")
+        return self.backend.transcribe(audio)
 
     # -- tray --------------------------------------------------------
 
@@ -2025,6 +2118,26 @@ class DictateApp:
                 (lambda n: lambda icon, item: self.set_model(n))(name),
                 checked=(lambda n: lambda item: self.current_model == n)(name),
                 radio=True,
+            ))
+        return pystray.Menu(*items)
+
+    def _backend_submenu(self) -> pystray.Menu:
+        labels = {
+            "auto": "Auto (GPU when available)",
+            "gpu":  "GPU (whisper.cpp Vulkan)",
+            "cpu":  "CPU (faster-whisper)",
+        }
+        items = []
+        for name in BACKEND_OPTIONS:
+            label = labels[name]
+            if name == "gpu" and not self._gpu_supported:
+                label = f"{labels[name]}  (unavailable)"
+            items.append(pystray.MenuItem(
+                label,
+                (lambda n: lambda icon, item: self.set_backend(n))(name),
+                checked=(lambda n: lambda item: self.current_backend == n)(name),
+                radio=True,
+                enabled=(lambda n: lambda item: not (n == "gpu" and not self._gpu_supported))(name),
             ))
         return pystray.Menu(*items)
 
@@ -2088,6 +2201,7 @@ class DictateApp:
             ),
             pystray.MenuItem("Mode", self._mode_submenu()),
             pystray.MenuItem("Model", self._model_submenu()),
+            pystray.MenuItem("Backend", self._backend_submenu()),
             pystray.MenuItem("Hotkey", self._hotkey_submenu()),
             pystray.MenuItem(
                 "Test sound",
@@ -2131,6 +2245,11 @@ class DictateApp:
             pass
         if self.overlay is not None:
             self.overlay.stop()
+        if self.backend is not None:
+            try:
+                self.backend.unload()
+            except Exception:
+                pass
         if self.icon is not None:
             self.icon.stop()
 

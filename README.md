@@ -104,6 +104,8 @@ All knobs live at the top of `dictate.py`:
 | `SOUND_VOLUME` | `0.35` | Volume of the built-in tones (0.0–1.0). |
 | `MODEL_OPTIONS` | `["tiny.en", "base.en", "small.en", "medium.en", "large-v3"]` | Choices shown in the tray "Model" submenu. |
 | `CPU_THREADS` | `0` | `0` = let faster-whisper pick. Bumping this can help on machines with lots of cores. |
+| `BACKEND` | `"auto"` | `"auto"` picks GPU when `whisper-server.exe` is bundled and Vulkan is available, otherwise CPU. `"gpu"` forces GPU (errors if unavailable). `"cpu"` forces faster-whisper. |
+| `BACKEND_OPTIONS` | `["auto", "gpu", "cpu"]` | Choices shown in the tray "Backend" submenu. |
 | `OVERLAY_WIDTH` / `OVERLAY_HEIGHT` | `220` / `48` | Pixel size of the floating panel. |
 | `OVERLAY_FILL_COLOR` | `"#0a0a0a"` | Panel background color (the "almost black" behind the waveform). |
 | `OVERLAY_OPACITY` | `0.7` | Window-wide alpha, `0.0`–`1.0`. Lower = more see-through. Recommended `0.55`–`0.85`. |
@@ -113,9 +115,34 @@ All knobs live at the top of `dictate.py`:
 | `OVERLAY_WAVE_COLOR` | `"#ff6868"` | Live waveform polyline color while recording. |
 | `OVERLAY_TRANSCRIBING_TEXT` | `"Transcribing"` | Label shown during the transcribe phase (waveform is hidden then). |
 
-After editing, just restart the app. Model, hotkey, and trigger mode are
-exceptions — all three are editable from the tray menu and persisted to
+After editing, just restart the app. Model, hotkey, backend, and trigger mode are
+editable from the tray menu and persisted to
 `%LOCALAPPDATA%\AriasSTT\config.json` across restarts.
+
+### GPU backend (whisper.cpp Vulkan)
+
+The tray "Backend" submenu lets you choose between:
+
+- **Auto** — uses GPU when `whisper-server.exe` is bundled and a Vulkan-capable
+  GPU is present; falls back to CPU automatically.
+- **GPU** — forces whisper.cpp Vulkan. Shows greyed-out in the menu if the
+  binary is absent.
+- **CPU** — forces faster-whisper (the original path).
+
+GPU inference is ~5–10× faster than CPU on a mid-range discrete GPU.
+
+**Model cache locations:**
+
+| Backend | Format | Location |
+|---|---|---|
+| CPU (faster-whisper) | CTranslate2 | `%USERPROFILE%\.cache\huggingface\hub` |
+| GPU (whisper.cpp) | GGUF (`.bin`) | `%LOCALAPPDATA%\AriasSTT\models\` |
+
+The two caches are independent. Keeping both backends active uses ~3 GB for
+`medium.en`. Delete either cache folder to free space.
+
+Vulkan drivers ship as part of your GPU's standard driver package — no extra
+SDK install is needed for end users.
 
 ### Trigger mode (Toggle vs Hold)
 
