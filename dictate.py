@@ -1559,10 +1559,17 @@ class DictateApp:
                 log(f"GPU load failed, falling back to CPU: {e}")
                 try:
                     self.backend.unload()
-                except Exception:
-                    pass
-                self.backend = self._instantiate_backend(FasterWhisperBackend)
-                self.backend.load(target)
+                except Exception as unload_err:
+                    log(f"GPU unload during fallback failed (ignored): {unload_err}")
+                cpu_backend = self._instantiate_backend(FasterWhisperBackend)
+                try:
+                    cpu_backend.load(target)
+                except Exception as cpu_err:
+                    self.backend = None
+                    raise RuntimeError(
+                        f"GPU failed ({e}); CPU fallback also failed: {cpu_err}"
+                    ) from cpu_err
+                self.backend = cpu_backend
             else:
                 raise
 
@@ -2227,6 +2234,8 @@ class DictateApp:
                 enabled=lambda item: not self._update_in_flight,
             ),
             pystray.MenuItem("Quit", lambda icon, item: self.quit()),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem(f"AriasSTT v{__version__}", None, enabled=False),
         )
 
     def quit(self) -> None:

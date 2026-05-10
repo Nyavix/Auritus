@@ -234,8 +234,6 @@ class WhisperCppBackend(Backend):
                     return
             except urllib.error.URLError:
                 time.sleep(0.25)
-            except Exception:
-                time.sleep(0.25)
 
         err = self._read_stderr_tail()
         raise TimeoutError(
@@ -279,7 +277,7 @@ class WhisperCppBackend(Backend):
         # pulling in soundfile.
         if audio.dtype != np.float32:
             audio = audio.astype(np.float32)
-        pcm16 = np.clip(audio * 32767.0, -32768.0, 32767.0).astype(np.int16)
+        pcm16 = np.clip(audio * 32768.0, -32768.0, 32767.0).astype(np.int16)
         buf = io.BytesIO()
         wavfile.write(buf, 16000, pcm16)
         wav_bytes = buf.getvalue()
@@ -295,7 +293,7 @@ class WhisperCppBackend(Backend):
             headers={"Content-Type": content_type},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=60) as resp:
             payload = resp.read().decode("utf-8", "replace")
 
         try:
