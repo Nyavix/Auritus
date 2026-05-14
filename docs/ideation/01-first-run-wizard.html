@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AriasSTT — First-run wizard (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0a0a0a; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .accent { color: #ff6868; }
+    .accent-bg { background: #ff6868; }
+    .panel { background: #141414; border: 1px solid #2a2a2a; }
+  </style>
+</head>
+<body class="min-h-screen text-zinc-200 flex items-center justify-center p-8">
+
+  <!-- Wizard shell -->
+  <div class="panel rounded-2xl w-[560px] shadow-2xl overflow-hidden">
+
+    <!-- Header / step indicator -->
+    <header class="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full accent-bg"></span>
+        <span class="font-semibold tracking-wide">AriasSTT</span>
+      </div>
+      <div class="text-sm text-zinc-400">
+        Step <span id="step-now">1</span> of 5
+      </div>
+    </header>
+
+    <!-- Steps -->
+    <main class="p-10 min-h-[320px]">
+
+      <!-- 1. Welcome -->
+      <section data-step="1" class="step">
+        <h1 class="text-2xl font-semibold mb-2">Welcome to AriasSTT.</h1>
+        <p class="text-zinc-400">Let's set up in 60 seconds.</p>
+      </section>
+
+      <!-- 2. Mic -->
+      <section data-step="2" class="step hidden">
+        <h1 class="text-2xl font-semibold mb-4">Pick a microphone.</h1>
+        <select class="w-full bg-zinc-900 border border-zinc-700 rounded-lg p-3">
+          <option>Realtek Audio (default)</option>
+          <option>USB Microphone</option>
+        </select>
+        <button class="mt-4 text-sm accent hover:underline">Test mic →</button>
+        <!-- TODO: live level meter -->
+      </section>
+
+      <!-- 3. Hotkey -->
+      <section data-step="3" class="step hidden">
+        <h1 class="text-2xl font-semibold mb-4">Pick a hotkey.</h1>
+        <div class="grid grid-cols-2 gap-2">
+          <button class="bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-left hover:border-zinc-500">Ctrl+Alt+Space</button>
+          <button class="bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-left hover:border-zinc-500">F9</button>
+          <button class="bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-left hover:border-zinc-500">Ctrl+Shift+D</button>
+          <button class="bg-zinc-900 border border-zinc-700 rounded-lg p-3 text-left hover:border-zinc-500">Custom…</button>
+        </div>
+      </section>
+
+      <!-- 4. Model -->
+      <section data-step="4" class="step hidden">
+        <h1 class="text-2xl font-semibold mb-4">Pick a model.</h1>
+        <div class="space-y-2">
+          <label class="flex items-center gap-3 bg-zinc-900 border border-zinc-700 rounded-lg p-3"><input type="radio" name="model"/> <span><b>Fast</b> — small.en · ~500 MB</span></label>
+          <label class="flex items-center gap-3 bg-zinc-900 border border-zinc-700 rounded-lg p-3"><input type="radio" name="model" checked/> <span><b>Balanced</b> — medium.en · ~1.5 GB · default</span></label>
+          <label class="flex items-center gap-3 bg-zinc-900 border border-zinc-700 rounded-lg p-3"><input type="radio" name="model"/> <span><b>Accurate</b> — large-v3 · ~3 GB</span></label>
+        </div>
+      </section>
+
+      <!-- 5. Done -->
+      <section data-step="5" class="step hidden">
+        <h1 class="text-2xl font-semibold mb-2">You're set.</h1>
+        <p class="text-zinc-400">Press <kbd class="px-2 py-0.5 bg-zinc-900 border border-zinc-700 rounded">Ctrl+Alt+Space</kbd> to start dictating.</p>
+      </section>
+
+    </main>
+
+    <!-- Footer / nav -->
+    <footer class="px-6 py-4 border-t border-zinc-800 flex items-center justify-between">
+      <button id="prev" class="text-sm text-zinc-400 hover:text-zinc-200 disabled:opacity-30" disabled>← Back</button>
+      <div class="flex gap-2">
+        <span class="w-2 h-2 rounded-full bg-zinc-700 step-dot"></span>
+        <span class="w-2 h-2 rounded-full bg-zinc-700 step-dot"></span>
+        <span class="w-2 h-2 rounded-full bg-zinc-700 step-dot"></span>
+        <span class="w-2 h-2 rounded-full bg-zinc-700 step-dot"></span>
+        <span class="w-2 h-2 rounded-full bg-zinc-700 step-dot"></span>
+      </div>
+      <button id="next" class="text-sm accent-bg text-zinc-900 font-medium px-4 py-2 rounded-lg hover:opacity-90">Next →</button>
+    </footer>
+  </div>
+
+  <script>
+    let step = 1;
+    const total = 5;
+    const sections = [...document.querySelectorAll('.step')];
+    const dots = [...document.querySelectorAll('.step-dot')];
+    const stepNow = document.getElementById('step-now');
+    const prev = document.getElementById('prev');
+    const next = document.getElementById('next');
+
+    function render() {
+      sections.forEach(s => s.classList.toggle('hidden', +s.dataset.step !== step));
+      dots.forEach((d, i) => d.classList.toggle('accent-bg', i < step));
+      dots.forEach((d, i) => d.classList.toggle('bg-zinc-700', i >= step));
+      stepNow.textContent = step;
+      prev.disabled = step === 1;
+      next.textContent = step === total ? 'Finish' : 'Next →';
+    }
+    prev.onclick = () => { if (step > 1) { step--; render(); } };
+    next.onclick = () => { if (step < total) { step++; render(); } };
+    render();
+  </script>
+</body>
+</html>

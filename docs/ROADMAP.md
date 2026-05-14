@@ -12,7 +12,7 @@ fastest way to remember where we are and what's next.
 | ✅ | `v0.1.0` | First public source release. Tray app, hotkey rebind menu. |
 | ✅ | `v0.2.0` | Live waveform glass overlay, hotkey reliability suite (P0–P5), Codex/Gemini review fixes (P6–P8), first installable Inno Setup `.exe`. |
 | ✅ | `v0.2.1` | In-app auto-update via GitHub Releases polling. GitHub Actions release pipeline (tag → build → upload, hands-off). |
-| 🚧 | `v0.3.0` | GPU acceleration via whisper.cpp Vulkan. Auto-detect GPU; falls back to CPU. Backend tray submenu. CI builds `whisper-server.exe` on tag. |
+| 🚧 | `v0.3.0` | GPU acceleration via whisper.cpp Vulkan. Auto-detect GPU; falls back to CPU. Backend tray submenu. CI builds `whisper-server.exe` on tag. Cancel hotkey (`<ctrl>+<f9>` default) — abort active recording or drop in-flight transcription before paste. |
 
 **Repo:** https://github.com/Nyavix/AriasSTT
 **Latest installer:** https://github.com/Nyavix/AriasSTT/releases/latest
@@ -34,6 +34,12 @@ longer the loop.
 Driven by what testers actually struggle with. Don't start until they've
 spent at least a few days with v0.2.1.
 
+> **Design pipeline.** Every feature in this and the next sections passes
+> through `docs/ideation/` first — one module per feature, `.md` for
+> spec + ASCII mockup, `.html` (Tailwind CDN) for click-through. Module
+> locks → PRD update → development. PRs cite the module's acceptance
+> criteria. See [`docs/ideation/README.md`](ideation/README.md).
+
 ### Backlog
 
 - [ ] **Settings GUI window**
@@ -41,6 +47,7 @@ spent at least a few days with v0.2.1.
     same pattern as `HotkeyCaptureDialog`).
   - Mirror every tray menu item plus tunables not currently exposed:
     - Hotkey (re-uses `HotkeyCaptureDialog` as a modal field control)
+    - Cancel hotkey (re-uses `HotkeyCaptureDialog`; collision warning vs main hotkey)
     - Mode (Toggle / Hold)
     - Model (radio buttons)
     - Mic device picker (sounddevice device list)
@@ -172,6 +179,9 @@ Requires the venv set up via `setup.bat` plus Inno Setup
 - `dictate.py` — single-file app (~1900 LOC).
 - `docs/HOTKEY_PLAN.md` — P0–P8 hotkey reliability + UX history.
 - `docs/ROADMAP.md` — this file.
+- `docs/ideation/` — per-module design workspace (`.md` spec + `.html`
+  click-through). Source of truth for unlocked features until the
+  module locks and gets pushed into the PRD.
 - `installer.iss` — Inno Setup script.
 - `installer.bat` / `build.bat` — local build scripts.
 - `AriasSTT.spec` — PyInstaller spec, regenerated on build.

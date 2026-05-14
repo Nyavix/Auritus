@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AriasSTT — Branding & icons (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #1c1c1c; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .panel { background: #141414; border: 1px solid #2a2a2a; }
+    .pulse-dot { animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+    /* Icon placeholder = round filled circle. Replace with real SVG art when designed. */
+    .icon { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; color: white; font-weight: 600; }
+  </style>
+</head>
+<body class="min-h-screen text-zinc-200 p-8 space-y-10">
+
+  <section class="panel rounded-2xl p-6 max-w-4xl mx-auto">
+    <h2 class="text-sm uppercase tracking-wider text-zinc-400 mb-6">Icon family — concept placeholders</h2>
+
+    <!-- Sizes row -->
+    <h3 class="text-xs text-zinc-500 mb-3">Sizes (idle blue)</h3>
+    <div class="flex items-end gap-6 mb-8">
+      <div class="text-center"><span class="icon" style="width:16px;height:16px;background:#5B8CFF;font-size:8px">A</span><div class="text-xs text-zinc-500 mt-1">16</div></div>
+      <div class="text-center"><span class="icon" style="width:32px;height:32px;background:#5B8CFF;font-size:14px">A</span><div class="text-xs text-zinc-500 mt-1">32</div></div>
+      <div class="text-center"><span class="icon" style="width:48px;height:48px;background:#5B8CFF;font-size:20px">A</span><div class="text-xs text-zinc-500 mt-1">48</div></div>
+      <div class="text-center"><span class="icon" style="width:128px;height:128px;background:#5B8CFF;font-size:48px">A</span><div class="text-xs text-zinc-500 mt-1">128 (app)</div></div>
+    </div>
+
+    <!-- State row -->
+    <h3 class="text-xs text-zinc-500 mb-3">States (32px tray size)</h3>
+    <div class="flex items-center gap-6">
+      <div class="text-center">
+        <span class="icon" style="width:32px;height:32px;background:#5B8CFF">A</span>
+        <div class="text-xs text-zinc-400 mt-2">idle</div>
+        <div class="text-[10px] text-zinc-600">#5B8CFF</div>
+      </div>
+      <div class="text-center">
+        <span class="icon pulse-dot" style="width:32px;height:32px;background:#ff6868">A</span>
+        <div class="text-xs text-zinc-400 mt-2">recording</div>
+        <div class="text-[10px] text-zinc-600">#ff6868</div>
+      </div>
+      <div class="text-center">
+        <span class="icon pulse-dot" style="width:32px;height:32px;background:#00d27a">A</span>
+        <div class="text-xs text-zinc-400 mt-2">meeting</div>
+        <div class="text-[10px] text-zinc-600">#00d27a</div>
+      </div>
+      <div class="text-center">
+        <span class="icon" style="width:32px;height:32px;background:#f5a524">A</span>
+        <div class="text-xs text-zinc-400 mt-2">transcribing</div>
+        <div class="text-[10px] text-zinc-600">#f5a524</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Background contrast test -->
+  <section class="panel rounded-2xl p-6 max-w-4xl mx-auto">
+    <h2 class="text-sm uppercase tracking-wider text-zinc-400 mb-4">Taskbar contrast test</h2>
+    <div class="grid grid-cols-2 gap-4">
+      <div class="bg-zinc-100 rounded-lg p-6 flex items-center gap-4">
+        <span class="icon" style="width:24px;height:24px;background:#5B8CFF">A</span>
+        <span class="text-sm text-zinc-700">Light taskbar (Win11 default)</span>
+      </div>
+      <div class="bg-zinc-900 rounded-lg p-6 flex items-center gap-4">
+        <span class="icon" style="width:24px;height:24px;background:#5B8CFF">A</span>
+        <span class="text-sm text-zinc-300">Dark taskbar (default)</span>
+      </div>
+    </div>
+    <p class="text-xs text-zinc-500 mt-4">TODO: real artwork must read on both backgrounds — add outline / glow if needed.</p>
+  </section>
+
+  <!-- Notes -->
+  <section class="panel rounded-2xl p-6 max-w-4xl mx-auto text-sm text-zinc-400 leading-relaxed">
+    <p><b class="text-zinc-200">Replace placeholders with final SVG / .ico art.</b> Colors above are the token list from <code class="bg-zinc-900 px-1.5 py-0.5 rounded">04-branding-icons.md §4.1</code>.</p>
+  </section>
+
+</body>
+</html>

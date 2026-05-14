@@ -29,3 +29,9 @@ dist/
 *.spec.bak
 installer-output/
 AriasSTT-Setup-*.exe
+
+# Vendored whisper.cpp source + CI-built Vulkan binaries (CI rebuilds these
+# on tag; keep them out of git to avoid bloat)
+third_party/
+vendor/whisper-cpp/*.dll
+vendor/whisper-cpp/*.exe

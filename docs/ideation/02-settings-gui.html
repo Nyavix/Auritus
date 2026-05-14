@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>AriasSTT — Settings (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { background: #0a0a0a; font-family: ui-sans-serif, system-ui, sans-serif; }
+    .panel { background: #141414; border: 1px solid #2a2a2a; }
+    .accent { color: #ff6868; }
+    .accent-bg { background: #ff6868; }
+    .row { border-bottom: 1px solid #1f1f1f; }
+    .group-title { color: #a1a1aa; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+    input[type="range"] { accent-color: #ff6868; }
+  </style>
+</head>
+<body class="min-h-screen text-zinc-200 flex items-start justify-center p-8">
+
+  <div class="panel rounded-2xl w-[640px] shadow-2xl overflow-hidden">
+
+    <header class="px-6 py-4 border-b border-zinc-800 flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full accent-bg"></span>
+        <span class="font-semibold tracking-wide">AriasSTT — Settings</span>
+      </div>
+      <button class="text-zinc-500 hover:text-zinc-200" aria-label="close">×</button>
+    </header>
+
+    <main class="p-6 space-y-8">
+
+      <!-- INPUT -->
+      <section>
+        <h2 class="group-title mb-3">Input</h2>
+        <div class="space-y-3">
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Hotkey</span>
+            <div class="flex gap-2">
+              <kbd class="px-3 py-1 bg-zinc-900 border border-zinc-700 rounded">Ctrl+Alt+Space</kbd>
+              <button class="text-sm accent hover:underline">Test</button>
+            </div>
+          </div>
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Cancel hotkey</span>
+            <kbd class="px-3 py-1 bg-zinc-900 border border-zinc-700 rounded">Ctrl+F9</kbd>
+          </div>
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Mode</span>
+            <div class="flex gap-4 text-sm">
+              <label class="flex items-center gap-1"><input type="radio" name="mode" checked/> Toggle</label>
+              <label class="flex items-center gap-1"><input type="radio" name="mode"/> Hold</label>
+            </div>
+          </div>
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Mic device</span>
+            <select class="bg-zinc-900 border border-zinc-700 rounded p-2">
+              <option>Realtek Audio (default)</option>
+              <option>USB Microphone</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- INFERENCE -->
+      <section>
+        <h2 class="group-title mb-3">Inference</h2>
+        <div class="space-y-3">
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Model</span>
+            <select class="bg-zinc-900 border border-zinc-700 rounded p-2">
+              <option>tiny.en</option><option>base.en</option><option>small.en</option>
+              <option selected>medium.en</option><option>large-v3</option>
+            </select>
+          </div>
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Backend</span>
+            <div class="flex gap-4 text-sm">
+              <label class="flex items-center gap-1"><input type="radio" name="backend" checked/> Auto</label>
+              <label class="flex items-center gap-1"><input type="radio" name="backend"/> GPU</label>
+              <label class="flex items-center gap-1"><input type="radio" name="backend"/> CPU</label>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- FEEDBACK -->
+      <section>
+        <h2 class="group-title mb-3">Feedback</h2>
+        <div class="space-y-3">
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Sounds</span>
+            <div class="flex items-center gap-3">
+              <label class="flex items-center gap-1 text-sm"><input type="checkbox" checked/> On</label>
+              <input type="range" min="0" max="100" value="35"/>
+            </div>
+          </div>
+          <div class="row pb-3">
+            <div class="flex items-center justify-between mb-2">
+              <span>Overlay opacity</span>
+              <span class="text-sm text-zinc-400">0.70</span>
+            </div>
+            <input type="range" min="0" max="100" value="70" class="w-full"/>
+          </div>
+          <div class="row pb-3 flex items-center justify-between">
+            <span>Position</span>
+            <div class="flex gap-4 text-sm">
+              <label class="flex items-center gap-1"><input type="radio" name="pos" checked/> Top</label>
+              <label class="flex items-center gap-1"><input type="radio" name="pos"/> Bottom</label>
+              <label class="flex items-center gap-1"><input type="radio" name="pos"/> Top-right</label>
+            </div>
+          </div>
+        </div>
+        <!-- TODO: live preview pane -->
+      </section>
+
+      <!-- SYSTEM -->
+      <section>
+        <h2 class="group-title mb-3">System</h2>
+        <div class="space-y-3">
+          <label class="row pb-3 flex items-center gap-2"><input type="checkbox" checked/> Start with Windows</label>
+          <button class="text-sm accent hover:underline">Open log folder</button>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="px-6 py-3 border-t border-zinc-800 text-xs text-zinc-500 flex items-center justify-between">
+      <span>AriasSTT v0.3.0</span>
+      <a href="#" class="hover:text-zinc-300">github.com/Nyavix/AriasSTT</a>
+    </footer>
+  </div>
+</body>
+</html>
