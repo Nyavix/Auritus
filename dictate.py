@@ -180,7 +180,7 @@ from backends import Backend, FasterWhisperBackend, WhisperCppBackend
 
 
 APP_NAME = "AriasSTT"
-__version__ = "0.3.2"  # bumped in CI on tag push; user visible via update flow
+__version__ = "0.3.3"  # bumped in CI on tag push; user visible via update flow
 LOG_PATH = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME / "ariasstt.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -2243,7 +2243,27 @@ class DictateApp:
         # produced by Recorder.stop().
         if self.backend is None:
             raise RuntimeError("_transcribe called before a backend was loaded")
-        return self.backend.transcribe(audio)
+        try:
+            return self.backend.transcribe(audio)
+        except Exception as e:
+            # The GPU server can fail a single inference even after its own
+            # retry (see WhisperCppBackend.transcribe). Rather than lose the
+            # user's captured speech, transcribe this one utterance on CPU.
+            # The persistent backend is left untouched so the next dictation
+            # goes back to GPU.
+            if not isinstance(self.backend, WhisperCppBackend):
+                raise
+            log(f"GPU transcription failed; CPU fallback for this utterance: {e}")
+            cpu = FasterWhisperBackend(
+                compute_type=COMPUTE_TYPE,
+                cpu_threads=CPU_THREADS,
+                log=log,
+            )
+            cpu.load(self.current_model)
+            try:
+                return cpu.transcribe(audio)
+            finally:
+                cpu.unload()
 
     # -- tray --------------------------------------------------------
 

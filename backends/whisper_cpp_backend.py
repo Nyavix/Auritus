@@ -19,6 +19,7 @@ backends can coexist and share nothing.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -327,19 +328,53 @@ class WhisperCppBackend(Backend):
             language="en" if self.model_name and self.model_name.endswith(".en") else "auto",
         )
 
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{self.port}/inference",
-            data=body,
-            headers={"Content-Type": content_type},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=3600) as resp:
-            payload = resp.read().decode("utf-8", "replace")
+        # whisper-server occasionally resets the connection on a single
+        # request while the process itself stays alive (a handler crash, not
+        # a full death). The captured audio is irreplaceable, so retry once
+        # before giving up; the next attempt almost always succeeds. The
+        # server's stderr tail is logged on each failure so the underlying
+        # cause is finally visible instead of just "connection reset".
+        transient = (ConnectionResetError, http.client.RemoteDisconnected)
+        last_exc: BaseException | None = None
+        for attempt in range(2):
+            if self.proc.poll() is not None:
+                raise RuntimeError(
+                    f"whisper-server died (exit {self.proc.returncode}). "
+                    f"Tail: {self._read_stderr_tail()[-400:]}"
+                )
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{self.port}/inference",
+                data=body,
+                headers={"Content-Type": content_type},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=3600) as resp:
+                    payload = resp.read().decode("utf-8", "replace")
+                try:
+                    return json.loads(payload).get("text", "").strip()
+                except json.JSONDecodeError:
+                    return payload.strip()
+            except urllib.error.URLError as e:
+                # URLError wraps the socket reset in .reason; HTTPError (a
+                # subclass) carries a real HTTP status and is not transient.
+                last_exc = e
+                is_reset = not isinstance(e, urllib.error.HTTPError) and (
+                    isinstance(getattr(e, "reason", None), transient)
+                )
+            except transient as e:
+                last_exc = e
+                is_reset = True
 
-        try:
-            return json.loads(payload).get("text", "").strip()
-        except json.JSONDecodeError:
-            return payload.strip()
+            self._log(
+                f"[backend:gpu] /inference attempt {attempt + 1} failed: "
+                f"{last_exc}. Tail: {self._read_stderr_tail()[-400:]}"
+            )
+            if not (is_reset and attempt == 0):
+                break
+            time.sleep(0.25)
+
+        raise RuntimeError(f"whisper-server /inference failed: {last_exc}")
 
     # ------------------------------------------------------------------
     # Teardown
