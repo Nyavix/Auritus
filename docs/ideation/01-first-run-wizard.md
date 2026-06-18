@@ -54,11 +54,11 @@ TBD — no mic detected, GPU greyed when binary absent, user closes mid-flow.
 
 ```
 ┌────────────────────────────────────────┐
-│  AriasSTT                              │
+│  Auritus                              │
 │  Step 1 of 5 — Welcome                 │
 ├────────────────────────────────────────┤
 │                                        │
-│  Welcome to AriasSTT.                  │
+│  Welcome to Auritus.                  │
 │  Let's set up in 60 seconds.           │
 │                                        │
 │                       [ Get started → ]│

@@ -12,7 +12,7 @@ binary fails to start because no Vulkan device is present, ``load()``
 raises and ``DictateApp`` falls back to the CPU backend.
 
 GGUF model files (``ggml-*.bin``) are downloaded on first use to
-``%LOCALAPPDATA%\\AriasSTT\\models\\`` -- separate from the
+``%LOCALAPPDATA%\\Auritus\\models\\`` -- separate from the
 faster-whisper / HuggingFace cache used by the CPU backend.  Both
 backends can coexist and share nothing.
 """
@@ -39,7 +39,7 @@ from scipy.io import wavfile
 from .base import Backend, LogFn
 
 
-# AriasSTT model name -> whisper.cpp GGUF filename.
+# Auritus model name -> whisper.cpp GGUF filename.
 MODEL_FILE_MAP: dict[str, str] = {
     "tiny.en":   "ggml-tiny.en.bin",
     "base.en":   "ggml-base.en.bin",
@@ -88,7 +88,7 @@ def _server_path() -> Path:
 
 def _models_dir() -> Path:
     appdata = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    p = Path(appdata) / "AriasSTT" / "models"
+    p = Path(appdata) / "Auritus" / "models"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -193,7 +193,7 @@ class WhisperCppBackend(Backend):
 
         creationflags = 0
         if sys.platform == "win32":
-            # CREATE_NO_WINDOW: keep the server console hidden when AriasSTT
+            # CREATE_NO_WINDOW: keep the server console hidden when Auritus
             # itself runs under pythonw / a windowed PyInstaller bundle.
             creationflags = 0x08000000  # subprocess.CREATE_NO_WINDOW
 
@@ -413,7 +413,7 @@ class WhisperCppBackend(Backend):
 
 def _build_multipart(wav_bytes: bytes, *, language: str) -> tuple[bytes, str]:
     """Hand-rolled multipart so we don't pull in `requests` for one POST."""
-    boundary = f"----AriasSTT-{uuid.uuid4().hex}"
+    boundary = f"----Auritus-{uuid.uuid4().hex}"
     crlf = b"\r\n"
 
     def part_header(disposition: str) -> bytes:

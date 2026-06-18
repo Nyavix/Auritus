@@ -27,7 +27,7 @@ Risk notes captured during planning:
   (only CPU / BLAS / CUDA prebuilts exist). llama.cpp ships a Vulkan win
   binary, proving the build is straightforward in CI.
 - Two model storage locations now coexist: `~/.cache/huggingface/hub`
-  (faster-whisper / CT2) and `%LOCALAPPDATA%\AriasSTT\models\`
+  (faster-whisper / CT2) and `%LOCALAPPDATA%\Auritus\models\`
   (whisper.cpp GGUF). For `medium.en` this is ~3 GB if the user keeps
   both. Document, don't dedupe.
 - Output text differs slightly between backends (segmenting,
@@ -54,7 +54,7 @@ docs/
 `WhisperCppBackend` does:
 - Path resolution for `whisper-server.exe` (dev: `vendor/whisper-cpp/`,
   bundled: `sys._MEIPASS/vendor/whisper-cpp/`).
-- GGUF model download to `%LOCALAPPDATA%\AriasSTT\models\` from
+- GGUF model download to `%LOCALAPPDATA%\Auritus\models\` from
   `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/<file>`.
   Map of model name → filename in `MODEL_FILE_MAP`.
 - Spawns `whisper-server.exe` on a free localhost port, polls the HTTP
@@ -80,13 +80,13 @@ pending.
 ### Files NOT yet modified (each has a TODO below)
 
 - `dictate.py` — wiring, tray submenu, persistence
-- `AriasSTT.spec`
+- `Auritus.spec`
 - `build.bat`
 - `setup.bat`
 - `requirements.txt` (probably unchanged — stdlib `urllib`/`subprocess`
   are sufficient)
 - `installer.iss` (probably unchanged — already does
-  `dist\AriasSTT\*` recursive)
+  `dist\Auritus\*` recursive)
 - `.github/workflows/release.yml`
 - `README.md`
 - `CLAUDE.md`
@@ -174,7 +174,7 @@ Then insert `pystray.MenuItem("Backend", self._backend_submenu())` into
 
 ### 3. PyInstaller spec — bundle the vendor binaries
 
-`AriasSTT.spec`: add to the top of the file (after the existing
+`Auritus.spec`: add to the top of the file (after the existing
 `collect_all` block):
 
 ```python
@@ -193,7 +193,7 @@ and have it call the spec — spec is the source of truth in CI already.)
 ### 4. `setup.bat` — local dev convenience
 
 Add a `[6/6]` step that, if `vendor\whisper-cpp\whisper-server.exe`
-is missing, fetches the latest CI-built artifact from the AriasSTT
+is missing, fetches the latest CI-built artifact from the Auritus
 repo's GitHub Releases (or skips with a notice that GPU mode will be
 unavailable until the user runs it through CI once). Don't try to
 install Vulkan SDK + cmake locally — too heavy.
@@ -222,7 +222,7 @@ upgrades are explicit.
 ### 6. Docs
 
 - `README.md`: add "Backend" row to the config table; document
-  `%LOCALAPPDATA%\AriasSTT\models\` as the GGUF cache; mention the
+  `%LOCALAPPDATA%\Auritus\models\` as the GGUF cache; mention the
   Vulkan requirement.
 - `CLAUDE.md`: update the architecture section to describe the backend
   abstraction (`backends/` module) and the two model storage locations.

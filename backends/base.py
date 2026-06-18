@@ -20,7 +20,7 @@ import numpy as np
 
 
 # Type for the optional logger injected by DictateApp so backend output
-# lands in the same ariasstt.log file as the rest of the app.
+# lands in the same auritus.log file as the rest of the app.
 LogFn = Callable[[str], None]
 
 

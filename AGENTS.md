@@ -33,7 +33,7 @@ All commands assume the repo root as CWD and that `setup.bat` has been run.
 | Register login auto-start | `install_startup.bat` |
 | Unregister login auto-start | `uninstall_startup.bat` |
 | List audio input devices (for setting `MIC_DEVICE`) | `venv\Scripts\python -m sounddevice` |
-| Tail the runtime log | `Get-Content "$env:LOCALAPPDATA\AriasSTT\ariasstt.log" -Wait` |
+| Tail the runtime log | `Get-Content "$env:LOCALAPPDATA\Auritus\auritus.log" -Wait` |
 
 To verify a code change manually: kill any running instance via the tray
 (right-click → Quit), launch the console version, exercise the hotkey, and
@@ -64,14 +64,14 @@ backends/
 `WhisperCppBackend`:
 - Resolves `whisper-server.exe` from `vendor/whisper-cpp/` (dev) or
   `sys._MEIPASS/vendor/whisper-cpp/` (bundle).
-- Downloads GGUF models to `%LOCALAPPDATA%\AriasSTT\models\` on first use.
+- Downloads GGUF models to `%LOCALAPPDATA%\Auritus\models\` on first use.
 - Spawns `whisper-server.exe` once per `load()` call; keeps it warm.
 - Encodes audio as 16-bit PCM WAV via `scipy.io.wavfile` and POSTs to
   the server's `/inference` endpoint (no `requests` dep — stdlib only).
 
 Two model cache locations coexist independently:
 - CPU: `%USERPROFILE%\.cache\huggingface\hub` (CTranslate2 format)
-- GPU: `%LOCALAPPDATA%\AriasSTT\models\` (GGUF `.bin` format)
+- GPU: `%LOCALAPPDATA%\Auritus\models\` (GGUF `.bin` format)
 
 ### Threading model (the part that catches you out)
 
@@ -113,9 +113,9 @@ in `__init__` (validates against `MODEL_OPTIONS`).
 
 ### Persistence
 
-- **Runtime log:** `%LOCALAPPDATA%\AriasSTT\ariasstt.log` (append-only, written
+- **Runtime log:** `%LOCALAPPDATA%\Auritus\auritus.log` (append-only, written
   by `log()`).
-- **User config:** `%LOCALAPPDATA%\AriasSTT\config.json`. Currently only stores
+- **User config:** `%LOCALAPPDATA%\Auritus\config.json`. Currently only stores
   `{"model": "..."}`. Written by `save_user_config`, read in `__init__`. The
   `MODEL_SIZE` constant in the config block is the *initial* value used only
   if no config file exists.

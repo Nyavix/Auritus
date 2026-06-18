@@ -14,8 +14,8 @@ fastest way to remember where we are and what's next.
 | ✅ | `v0.2.1` | In-app auto-update via GitHub Releases polling. GitHub Actions release pipeline (tag → build → upload, hands-off). |
 | 🚧 | `v0.3.0` | GPU acceleration via whisper.cpp Vulkan. Auto-detect GPU; falls back to CPU. Backend tray submenu. CI builds `whisper-server.exe` on tag. Cancel hotkey (`<ctrl>+<f9>` default) — abort active recording or drop in-flight transcription before paste. |
 
-**Repo:** https://github.com/Nyavix/AriasSTT
-**Latest installer:** https://github.com/Nyavix/AriasSTT/releases/latest
+**Repo:** https://github.com/Nyavix/Auritus
+**Latest installer:** https://github.com/Nyavix/Auritus/releases/latest
 
 **Testers** (Windows, as of v0.2.0):
 - Sister
@@ -162,15 +162,15 @@ If monetization is pursued later, the framing should be:
 3. `git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`.
 4. Watch `gh run list --workflow=release.yml --limit 1`. Build takes
    ~4 min.
-5. CI uploads `AriasSTT-Setup-vX.Y.Z.exe` to the GitHub release on its
+5. CI uploads `Auritus-Setup-vX.Y.Z.exe` to the GitHub release on its
    own.
 6. Edit release notes if needed: `gh release edit vX.Y.Z --notes "..."`.
 7. Testers see the update toast within 30 s of their next launch.
 
 ### Local manual build (for debugging without tagging)
 ```
-build.bat        # PyInstaller -> dist\AriasSTT\AriasSTT.exe
-installer.bat    # iscc installer.iss -> installer-output\AriasSTT-Setup-v*.exe
+build.bat        # PyInstaller -> dist\Auritus\Auritus.exe
+installer.bat    # iscc installer.iss -> installer-output\Auritus-Setup-v*.exe
 ```
 Requires the venv set up via `setup.bat` plus Inno Setup
 (`winget install JRSoftware.InnoSetup`).
@@ -184,7 +184,7 @@ Requires the venv set up via `setup.bat` plus Inno Setup
   module locks and gets pushed into the PRD.
 - `installer.iss` — Inno Setup script.
 - `installer.bat` / `build.bat` — local build scripts.
-- `AriasSTT.spec` — PyInstaller spec, regenerated on build.
+- `Auritus.spec` — PyInstaller spec, regenerated on build.
 - `.github/workflows/release.yml` — CI release pipeline.
 - `requirements.txt` — Python deps for CI install.
 - `CLAUDE.md` — project instructions for future Claude Code sessions.

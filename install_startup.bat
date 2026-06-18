@@ -2,7 +2,7 @@
 setlocal enableextensions
 
 REM ----------------------------------------------------------------------
-REM Creates a shortcut in the Windows Startup folder so AriasSTT launches
+REM Creates a shortcut in the Windows Startup folder so Auritus launches
 REM on every login, using pythonw.exe so no console window appears.
 REM
 REM Why startup folder over Task Scheduler:
@@ -17,7 +17,7 @@ cd /d "%~dp0"
 set "SCRIPT=%CD%\dictate.py"
 set "PYW=%CD%\venv\Scripts\pythonw.exe"
 set "STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-set "LNK=%STARTUP%\AriasSTT.lnk"
+set "LNK=%STARTUP%\Auritus.lnk"
 
 if not exist "%PYW%" (
     echo [ERROR] %PYW% not found. Run setup.bat first.
@@ -46,7 +46,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$s.Arguments = '\"%SCRIPT%\"';" ^
     "$s.WorkingDirectory = '%CD%';" ^
     "$s.WindowStyle = 7;" ^
-    "$s.Description = 'AriasSTT push-to-talk Whisper dictation';" ^
+    "$s.Description = 'Auritus push-to-talk Whisper dictation';" ^
     "$s.Save()"
 
 if errorlevel 1 (
@@ -55,6 +55,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done. AriasSTT will launch automatically on next login.
+echo Done. Auritus will launch automatically on next login.
 echo To remove: run uninstall_startup.bat
 exit /b 0

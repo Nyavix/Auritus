@@ -1,9 +1,9 @@
-# AriasSTT — Gumroad listing
+# Auritus — Gumroad listing
 
 > Go-live checklist:
-> 1. Product file to upload: `AriasSTT-Setup-v0.3.3.exe` — pull from GitHub Releases:
->    `gh release download v0.3.3 -R Nyavix/AriasSTT -p '*.exe'`
->    (direct: https://github.com/Nyavix/AriasSTT/releases/download/v0.3.3/AriasSTT-Setup-v0.3.3.exe)
+> 1. Product file to upload: `Auritus-Setup-v0.3.3.exe` — pull from GitHub Releases:
+>    `gh release download v0.3.3 -R Nyavix/Auritus -p '*.exe'`
+>    (direct: https://github.com/Nyavix/Auritus/releases/download/v0.3.3/Auritus-Setup-v0.3.3.exe)
 > 2. Price: **$19 launch** (bump to $29 later). One-time, not subscription.
 > 3. Add 2-3 screenshots + a short tray-in-action GIF before publishing.
 > 4. Set a refund policy (fills the [set your policy] line below).
@@ -14,7 +14,7 @@
 ---
 
 ## Title
-AriasSTT — Local Whisper Dictation for Windows
+Auritus — Local Whisper Dictation for Windows
 
 ## Summary
 Press a hotkey, talk, and your words show up in whatever you're typing into. Whisper runs on your own machine, so nothing gets uploaded and there's no account to make. Works on plain CPUs and AMD GPUs, not just NVIDIA.
@@ -23,7 +23,7 @@ Press a hotkey, talk, and your words show up in whatever you're typing into. Whi
 
 I built this because every "just use local dictation" recommendation assumed I had an NVIDIA card. My machine runs an AMD Radeon, and most of those tools either refused to start or crawled. So I made one that doesn't care what GPU you have.
 
-Here's how it works. Press Ctrl+Alt+Space, say what you're thinking, press it again. AriasSTT transcribes your voice with Whisper on your own computer and pastes the text straight into Notepad, your browser, Slack, your editor, an email, wherever the cursor happens to be. No browser tab, no sign-in, no monthly fee. Your audio never leaves the machine.
+Here's how it works. Press Ctrl+Alt+Space, say what you're thinking, press it again. Auritus transcribes your voice with Whisper on your own computer and pastes the text straight into Notepad, your browser, Slack, your editor, an email, wherever the cursor happens to be. No browser tab, no sign-in, no monthly fee. Your audio never leaves the machine.
 
 What you're actually getting:
 
@@ -35,7 +35,7 @@ What you're actually getting:
 
 What's in the download:
 
-- `AriasSTT-Setup-v0.3.3.exe`, a one-click installer with both the CPU and GPU backends bundled in.
+- `Auritus-Setup-v0.3.3.exe`, a one-click installer with both the CPU and GPU backends bundled in.
 - An option to auto-start when you log in.
 - Free updates across v0.x.
 

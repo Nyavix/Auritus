@@ -2,7 +2,7 @@
 setlocal enableextensions
 
 REM ----------------------------------------------------------------------
-REM AriasSTT setup
+REM Auritus setup
 REM   - Creates a local virtual environment in .\venv
 REM   - Installs runtime dependencies
 REM   - Pre-downloads the faster-whisper medium.en model
@@ -12,7 +12,7 @@ REM ----------------------------------------------------------------------
 cd /d "%~dp0"
 
 echo.
-echo === AriasSTT setup ===
+echo === Auritus setup ===
 echo Working directory: %CD%
 echo.
 

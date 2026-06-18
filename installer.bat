@@ -2,12 +2,12 @@
 setlocal enableextensions
 
 rem ----------------------------------------------------------------------
-rem AriasSTT installer compiler.
+rem Auritus installer compiler.
 rem
 rem Requires Inno Setup 6 (compiler iscc.exe). Install with:
 rem   winget install JRSoftware.InnoSetup
 rem
-rem Output: installer-output\AriasSTT-Setup-vX.Y.Z.exe
+rem Output: installer-output\Auritus-Setup-vX.Y.Z.exe
 rem ----------------------------------------------------------------------
 
 set "ROOT=%~dp0"
@@ -30,7 +30,7 @@ if exist "%ISCC1%" (
     set "ISCC=iscc.exe"
 )
 
-if not exist "%ROOT%dist\AriasSTT\AriasSTT.exe" (
+if not exist "%ROOT%dist\Auritus\Auritus.exe" (
     echo [installer] Bundle not found. Run build.bat first.
     exit /b 1
 )

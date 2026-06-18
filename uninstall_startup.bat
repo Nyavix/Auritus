@@ -1,7 +1,7 @@
 @echo off
 setlocal enableextensions
 
-set "LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AriasSTT.lnk"
+set "LNK=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Auritus.lnk"
 
 if exist "%LNK%" (
     del "%LNK%"

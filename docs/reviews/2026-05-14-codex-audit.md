@@ -1,4 +1,4 @@
-# AriasSTT — Codex Audit (2026-05-14)
+# Auritus — Codex Audit (2026-05-14)
 
 Source: Codex rescue run via `/codex:rescue`.
 Scope: full audit — code quality, correctness bugs, race conditions in the

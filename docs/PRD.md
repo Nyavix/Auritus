@@ -1,4 +1,4 @@
-# AriasSTT — Product Requirements Document
+# Auritus — Product Requirements Document
 
 **Version:** 1.0-draft  
 **Date:** 2026-05-10  
@@ -8,7 +8,7 @@
 
 ## 1. Product Overview
 
-AriasSTT is a free, open-source Windows tray application that converts speech to text locally — no cloud, no subscription, no data sent anywhere. It targets anyone who types a lot or attends meetings and wants a fast, private, offline alternative to cloud dictation services.
+Auritus is a free, open-source Windows tray application that converts speech to text locally — no cloud, no subscription, no data sent anywhere. It targets anyone who types a lot or attends meetings and wants a fast, private, offline alternative to cloud dictation services.
 
 It is part of the **Arias ecosystem** and will be designed and branded accordingly.
 
@@ -23,7 +23,7 @@ People who type for a living (writers, students, office workers, developers) spe
 - An NVIDIA GPU (most local Whisper tools)
 - Deep technical setup (running Whisper from the command line)
 
-AriasSTT eliminates all four barriers: **local, Windows, GPU-agnostic (AMD/NVIDIA/Intel/CPU), one-click install.**
+Auritus eliminates all four barriers: **local, Windows, GPU-agnostic (AMD/NVIDIA/Intel/CPU), one-click install.**
 
 ---
 
@@ -39,7 +39,7 @@ AriasSTT eliminates all four barriers: **local, Windows, GPU-agnostic (AMD/NVIDI
 
 ## 4. Brand Identity
 
-- **Name:** AriasSTT (short-form: Arias)
+- **Name:** Auritus (short-form: Arias)
 - **Brand family:** Part of the Arias ecosystem
 - **Tone:** Friendly, accessible, approachable — plain language, warm design, built for non-technical users without dumbing down for technical ones
 - **Distribution:** GitHub Releases (primary) + landing page (secondary)
@@ -83,7 +83,7 @@ AriasSTT eliminates all four barriers: **local, Windows, GPU-agnostic (AMD/NVIDI
 **Trigger:** No `config.json` exists (fresh install).
 
 **Steps:**
-1. **Welcome screen** — "Welcome to AriasSTT. Let's set up in 60 seconds."
+1. **Welcome screen** — "Welcome to Auritus. Let's set up in 60 seconds."
 2. **Mic selection** — List of detected audio devices; default highlighted. Test button plays a level meter.
 3. **Hotkey selection** — Preset list with the HotkeyCaptureDialog for custom. Warning shown for known conflicts (Teams, Discord).
 4. **Model choice** — Three options: Fast (small.en), Balanced (medium.en, default), Accurate (large-v3). Shows estimated first-download size and speed tradeoff.
@@ -104,8 +104,8 @@ AriasSTT eliminates all four barriers: **local, Windows, GPU-agnostic (AMD/NVIDI
 - OR accessible via tray menu: "Start meeting recording" / "Stop & transcribe"
 - While recording: tray icon pulses or shows a distinct color (e.g. green dot); overlay shows "Meeting recording..." + duration timer
 - When stopped: transitions to "Transcribing..." state; transcription runs on a background thread
-- On completion: saves file to `Documents\AriasSTT\meetings\YYYY-MM-DD_HH-MM.md`
-- Notification: "Meeting transcript saved → Documents\AriasSTT\meetings\..." with a clickable "Open folder" action
+- On completion: saves file to `Documents\Auritus\meetings\YYYY-MM-DD_HH-MM.md`
+- Notification: "Meeting transcript saved → Documents\Auritus\meetings\..." with a clickable "Open folder" action
 
 **Transcript format:**
 

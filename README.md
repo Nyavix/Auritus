@@ -1,4 +1,4 @@
-# AriasSTT
+# Auritus
 
 Push-to-talk Whisper dictation tray app for Windows. Press a global hotkey to
 start recording, press it again to stop — the audio is transcribed locally on
@@ -45,7 +45,7 @@ Foreground mode with console output (handy when debugging):
 venv\Scripts\python dictate.py
 ```
 
-A blue dot appears in the system tray when AriasSTT is idle.
+A blue dot appears in the system tray when Auritus is idle.
 
 ## Use
 
@@ -66,7 +66,7 @@ install_startup.bat
 ```
 
 This drops a shortcut into your user Startup folder
-(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\AriasSTT.lnk`) that
+(`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Auritus.lnk`) that
 launches `pythonw dictate.py` so there is no console window.
 
 To disable:
@@ -119,7 +119,7 @@ All knobs live at the top of `dictate.py`:
 
 After editing, just restart the app. Model, hotkey, backend, and trigger mode are
 editable from the tray menu and persisted to
-`%LOCALAPPDATA%\AriasSTT\config.json` across restarts.
+`%LOCALAPPDATA%\Auritus\config.json` across restarts.
 
 ### GPU backend (whisper.cpp Vulkan)
 
@@ -138,7 +138,7 @@ GPU inference is ~5–10× faster than CPU on a mid-range discrete GPU.
 | Backend | Format | Location |
 |---|---|---|
 | CPU (faster-whisper) | CTranslate2 | `%USERPROFILE%\.cache\huggingface\hub` |
-| GPU (whisper.cpp) | GGUF (`.bin`) | `%LOCALAPPDATA%\AriasSTT\models\` |
+| GPU (whisper.cpp) | GGUF (`.bin`) | `%LOCALAPPDATA%\Auritus\models\` |
 
 The two caches are independent. Keeping both backends active uses ~3 GB for
 `medium.en`. Delete either cache folder to free space.
@@ -229,7 +229,7 @@ MIC_DEVICE = "Microphone (Realtek"
 
 ## Troubleshooting
 
-**Logs:** `%LOCALAPPDATA%\AriasSTT\ariasstt.log` (also reachable from the
+**Logs:** `%LOCALAPPDATA%\Auritus\auritus.log` (also reachable from the
 tray menu → "Open log folder").
 
 **No tray icon appears.** Check the log. Most likely the model failed to
@@ -246,7 +246,7 @@ your CPU. Drop to `small.en` or `base.en` for snappier turnaround.
 
 **Paste does nothing but text is on the clipboard.** Some elevated apps
 (running as Administrator) refuse synthetic input from a non-elevated process.
-Either run AriasSTT elevated as well, or paste with Ctrl+V yourself.
+Either run Auritus elevated as well, or paste with Ctrl+V yourself.
 
 ## Files
 

@@ -1,5 +1,5 @@
 """
-Pluggable inference backends for AriasSTT.
+Pluggable inference backends for Auritus.
 
 Two backends are exposed:
 

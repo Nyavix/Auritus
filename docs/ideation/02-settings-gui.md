@@ -58,7 +58,7 @@ without restart.
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│  AriasSTT — Settings                              [×]  │
+│  Auritus — Settings                              [×]  │
 ├────────────────────────────────────────────────────────┤
 │  ▸ Input                                               │
 │     Hotkey         [Ctrl+Alt+Space]      [Test]        │
@@ -81,7 +81,7 @@ without restart.
 │     [✓] Start with Windows                             │
 │     [ Open log folder ]                                │
 │                                                        │
-│  AriasSTT v0.3.0 — github.com/Nyavix/AriasSTT          │
+│  Auritus v0.3.0 — github.com/Nyavix/Auritus          │
 └────────────────────────────────────────────────────────┘
 W TBD (≈560) · H TBD (≈640)
 ```

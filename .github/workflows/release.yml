@@ -92,16 +92,16 @@ jobs:
       - name: Bundle with PyInstaller
         shell: pwsh
         run: |
-          python -m PyInstaller --noconfirm --clean AriasSTT.spec
+          python -m PyInstaller --noconfirm --clean Auritus.spec
 
       - name: Verify bundle
         shell: pwsh
         run: |
-          if (-not (Test-Path "dist\AriasSTT\AriasSTT.exe")) {
+          if (-not (Test-Path "dist\Auritus\Auritus.exe")) {
             Write-Error "Bundle missing"
             exit 1
           }
-          $sizeMB = [math]::Round((Get-ChildItem -Recurse "dist\AriasSTT" | Measure-Object -Sum Length).Sum / 1MB, 1)
+          $sizeMB = [math]::Round((Get-ChildItem -Recurse "dist\Auritus" | Measure-Object -Sum Length).Sum / 1MB, 1)
           Write-Host "Bundle size: $sizeMB MB"
 
       - name: Install Inno Setup
@@ -128,7 +128,7 @@ jobs:
       - name: Upload installer to release
         uses: softprops/action-gh-release@v2
         with:
-          files: installer-output/AriasSTT-Setup-v*.exe
+          files: installer-output/Auritus-Setup-v*.exe
           generate_release_notes: true
           fail_on_unmatched_files: true
           token: ${{ secrets.GITHUB_TOKEN }}

@@ -10,7 +10,7 @@ last-updated: 2026-05-14
 
 # Landing page
 
-> Public-facing page that pitches AriasSTT, links the latest release, and
+> Public-facing page that pitches Auritus, links the latest release, and
 > demos the overlay in motion.
 
 ## 1. Purpose
@@ -22,7 +22,7 @@ clicks Download.
 
 ## 2. User stories
 
-- As a visitor, I want to understand what AriasSTT does within 5
+- As a visitor, I want to understand what Auritus does within 5
   seconds of landing.
 - As a visitor, I want a one-click download from the hero.
 - As a visitor, I want to see the overlay in action without installing.
@@ -45,7 +45,7 @@ None server-side. May log download clicks if hosting supports it.
 
 ### 3.5 Edge cases
 - Release URL rot — "Download latest" should always link to
-  `/releases/latest/download/AriasSTT-Setup.exe` (GitHub redirects).
+  `/releases/latest/download/Auritus-Setup.exe` (GitHub redirects).
 - No-JS visitors — page must function (CTA + content). Hero animation
   is progressive enhancement.
 
@@ -55,7 +55,7 @@ PRD §7 sections, refined:
 
 ```
 ┌────────────────────────────────────────────────────┐
-│  AriasSTT                                  GitHub  │
+│  Auritus                                  GitHub  │
 ├────────────────────────────────────────────────────┤
 │                                                    │
 │     Whisper into clipboard.                        │
@@ -78,7 +78,7 @@ PRD §7 sections, refined:
 ├────────────────────────────────────────────────────┤
 │  Download                                          │
 │    Latest: v1.0.0 — Windows 10/11                  │
-│    [ AriasSTT-Setup-v1.0.0.exe ]                   │
+│    [ Auritus-Setup-v1.0.0.exe ]                   │
 │    sha256: ...                                     │
 ├────────────────────────────────────────────────────┤
 │  Footer — GitHub · License (MIT) · v1.0.0          │
@@ -97,7 +97,7 @@ Open `05-landing-page.html` for a click-through prototype.
 ## 5. Acceptance criteria
 
 - [ ] Hero loads with CTA + headline above the fold on a 1280×720 screen.
-- [ ] "Download" links to `/releases/latest/download/AriasSTT-Setup.exe`.
+- [ ] "Download" links to `/releases/latest/download/Auritus-Setup.exe`.
 - [ ] "How it works" shows 3 steps with icons or screenshots.
 - [ ] Features list mirrors PRD §6.1 shipped highlights.
 - [ ] Footer shows version pulled from the latest tag (manual or

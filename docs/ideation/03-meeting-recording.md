@@ -11,7 +11,7 @@ last-updated: 2026-05-14
 # Meeting recording mode
 
 > Long-session capture that saves a timestamped, model-aware Markdown
-> transcript to `Documents\AriasSTT\meetings\`.
+> transcript to `Documents\Auritus\meetings\`.
 
 ## 1. Purpose
 
@@ -46,7 +46,7 @@ dedicated stop-without-save?
 - Stop: same hotkey toggles off, or tray → "Stop & transcribe".
 
 ### 3.4 Outputs
-File at `Documents\AriasSTT\meetings\YYYY-MM-DD_HH-MM.md` formatted as:
+File at `Documents\Auritus\meetings\YYYY-MM-DD_HH-MM.md` formatted as:
 
 ```markdown
 # Meeting — 2026-05-10 14:32
@@ -60,7 +60,7 @@ File at `Documents\AriasSTT\meetings\YYYY-MM-DD_HH-MM.md` formatted as:
 [00:01:14] So the first item is the Q2 roadmap review...
 ```
 
-Notification: "Meeting transcript saved → Documents\AriasSTT\meetings\…"
+Notification: "Meeting transcript saved → Documents\Auritus\meetings\…"
 with a clickable "Open folder" action.
 
 ### 3.5 Edge cases

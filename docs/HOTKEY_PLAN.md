@@ -139,7 +139,7 @@ menu. Most of this is already in place; just polish the surfaced state.
 |---|---|
 | Replace pynput with `RegisterHotKey` for the trigger | No key-up event → kills hold mode. No priority gain over LL hooks. |
 | Switch to the `keyboard` PyPI package | Same `WH_KEYBOARD_LL` underneath. Often wants admin elevation. Adds packaging risk. |
-| Run AriasSTT elevated to outrank other hooks | LL hook order isn't strictly priority-based by elevation; security + UX cost; breaks the existing "elevated app refuses synthetic input" fallback story. |
+| Run Auritus elevated to outrank other hooks | LL hook order isn't strictly priority-based by elevation; security + UX cost; breaks the existing "elevated app refuses synthetic input" fallback story. |
 | Custom kernel/driver hook | Out of scope for a tray app. |
 
 ---

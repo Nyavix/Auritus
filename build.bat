@@ -2,15 +2,15 @@
 setlocal enableextensions
 
 rem ----------------------------------------------------------------------
-rem AriasSTT bundle script.
+rem Auritus bundle script.
 rem
-rem Produces a self-contained folder install at dist\AriasSTT\ that does
+rem Produces a self-contained folder install at dist\Auritus\ that does
 rem NOT require Python on the target machine. The Whisper model is still
 rem fetched from HuggingFace at first run and cached under
 rem %USERPROFILE%\.cache\huggingface, so the bundle stays under ~700 MB.
 rem
 rem Run:  build.bat
-rem Output: dist\AriasSTT\AriasSTT.exe
+rem Output: dist\Auritus\Auritus.exe
 rem ----------------------------------------------------------------------
 
 set "ROOT=%~dp0"
@@ -26,11 +26,11 @@ echo [build] Cleaning previous output...
 if exist "%ROOT%build" rmdir /s /q "%ROOT%build"
 if exist "%ROOT%dist"  rmdir /s /q "%ROOT%dist"
 
-echo [build] Bundling AriasSTT (folder mode, no console window)...
+echo [build] Bundling Auritus (folder mode, no console window)...
 "%PY%" -m PyInstaller ^
     --noconfirm ^
     --clean ^
-    --name AriasSTT ^
+    --name Auritus ^
     --windowed ^
     --collect-all faster_whisper ^
     --collect-all ctranslate2 ^
@@ -54,8 +54,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [build] Done. Bundle at: dist\AriasSTT\
-echo [build] Smoke test:        dist\AriasSTT\AriasSTT.exe
+echo [build] Done. Bundle at: dist\Auritus\
+echo [build] Smoke test:        dist\Auritus\Auritus.exe
 echo.
 echo Next: run installer.bat to compile the Inno Setup installer.
 endlocal

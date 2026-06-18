@@ -19,7 +19,7 @@ dist/
 .DS_Store
 Thumbs.db
 
-# AriasSTT runtime artifacts (per-user, lives under %LOCALAPPDATA%\AriasSTT)
+# Auritus runtime artifacts (per-user, lives under %LOCALAPPDATA%\Auritus)
 *.log
 config.json
 
@@ -28,7 +28,7 @@ build/
 dist/
 *.spec.bak
 installer-output/
-AriasSTT-Setup-*.exe
+Auritus-Setup-*.exe
 
 # Vendored whisper.cpp source + CI-built Vulkan binaries (CI rebuilds these
 # on tag; keep them out of git to avoid bloat)

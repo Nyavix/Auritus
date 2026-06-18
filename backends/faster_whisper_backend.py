@@ -1,7 +1,7 @@
 """
 faster-whisper / CTranslate2 backend (CPU).
 
-This is the original AriasSTT inference path.  Behaviour is identical to
+This is the original Auritus inference path.  Behaviour is identical to
 what ``DictateApp._transcribe`` did before the backend split: int8 on
 CPU, beam_size=1, VAD filter on, no timestamps, no prior context.
 """

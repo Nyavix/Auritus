@@ -1,5 +1,5 @@
 """
-AriasSTT - push-to-talk Whisper dictation tray app for Windows.
+Auritus - push-to-talk Whisper dictation tray app for Windows.
 
 Toggle hotkey starts/stops a recording. On stop, audio is transcribed locally
 with faster-whisper (CPU), copied to the clipboard, and pasted into the
@@ -129,7 +129,7 @@ CPU_THREADS = 0
 #   "auto" -- use GPU (whisper.cpp Vulkan) when available, else CPU.
 #   "gpu"  -- force whisper.cpp Vulkan. Errors loudly if no Vulkan device
 #             is found or the binary isn't bundled.
-#   "cpu"  -- force faster-whisper CPU (the original AriasSTT path).
+#   "cpu"  -- force faster-whisper CPU (the original Auritus path).
 # After first run, the choice is editable from the tray "Backend" submenu
 # and persisted in config.json. This constant is only the initial value.
 BACKEND = "auto"
@@ -179,9 +179,9 @@ except Exception:
 from backends import Backend, FasterWhisperBackend, WhisperCppBackend
 
 
-APP_NAME = "AriasSTT"
+APP_NAME = "Auritus"
 __version__ = "0.3.3"  # bumped in CI on tag push; user visible via update flow
-LOG_PATH = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME / "ariasstt.log"
+LOG_PATH = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME / "auritus.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -238,11 +238,11 @@ def notify_force(title: str, message: str, timeout: int = 4) -> None:
 # downloads the installer and runs it silently; the installer's
 # CloseApplications=force replaces the running app and relaunches.
 
-UPDATE_REPO = "Nyavix/AriasSTT"
+UPDATE_REPO = "Nyavix/Auritus"
 UPDATE_CHECK_DELAY_S = 30        # let the app fully start before hitting the network
 UPDATE_API_TIMEOUT_S = 10
 UPDATE_DOWNLOAD_TIMEOUT_S = 600  # installer can be ~100 MB on slow connections
-_UPDATE_USER_AGENT = f"AriasSTT/{__version__} (+https://github.com/{UPDATE_REPO})"
+_UPDATE_USER_AGENT = f"Auritus/{__version__} (+https://github.com/{UPDATE_REPO})"
 
 
 def _parse_version(s: str) -> tuple[int, ...]:
@@ -279,7 +279,7 @@ def check_for_update() -> tuple[str, str] | None:
         return None
     for asset in data.get("assets", []) or []:
         name = asset.get("name", "")
-        if name.startswith("AriasSTT-Setup") and name.endswith(".exe"):
+        if name.startswith("Auritus-Setup") and name.endswith(".exe"):
             url = asset.get("browser_download_url")
             if url:
                 return tag.lstrip("vV"), url
@@ -599,7 +599,7 @@ SOUND_PRESETS = {
 
 def _write_temp_wav(data: bytes, name: str) -> str | None:
     try:
-        path = os.path.join(tempfile.gettempdir(), f"ariasstt_{name}.wav")
+        path = os.path.join(tempfile.gettempdir(), f"auritus_{name}.wav")
         with open(path, "wb") as f:
             f.write(data)
         return path
@@ -1928,7 +1928,7 @@ class DictateApp:
             log(f"Downloading update v{version} from {url}")
             tmp_dir = tempfile.gettempdir()
             installer_path = os.path.join(
-                tmp_dir, f"AriasSTT-Setup-v{version}.exe",
+                tmp_dir, f"Auritus-Setup-v{version}.exe",
             )
             download_installer(url, installer_path)
             log(f"Installer downloaded: {installer_path}")
@@ -2428,7 +2428,7 @@ class DictateApp:
             ),
             pystray.MenuItem("Quit", lambda icon, item: self.quit()),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem(f"AriasSTT v{__version__}", None, enabled=False),
+            pystray.MenuItem(f"Auritus v{__version__}", None, enabled=False),
         )
 
     def quit(self) -> None:

@@ -97,14 +97,14 @@ Open `04-branding-icons.html` to see the icon family at 16 / 32 / 48 /
 |---|----------|-----------|------------|
 | 1 | Who designs the icon family? (PRD §9) | y | |
 | 2 | Animate the recording icon (pulse) or static? | n | |
-| 3 | Reuse Arias master logo or design AriasSTT-specific mark? | y | |
+| 3 | Reuse Arias master logo or design Auritus-specific mark? | y | |
 
 ## 7. Dependencies
 
 - Modules: [03-meeting-recording](03-meeting-recording.md) (shares
   meeting accent color).
 - Code: `dictate.py` → `ICON_IDLE`, `ICON_RECORDING`, `ICON_BUSY`.
-- External: `installer.iss`, `AriasSTT.spec`.
+- External: `installer.iss`, `Auritus.spec`.
 
 ## 8. Status log
 
