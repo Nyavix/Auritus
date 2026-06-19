@@ -2476,30 +2476,55 @@ class DictateApp:
             # but they will hit the same error when toggling.
             log("Continuing despite mic check failure; toggle will retry.")
 
+        # Show the tray icon BEFORE loading the model. On first run the model
+        # is a one-time ~1.5 GB download; loading it inline here would leave the
+        # process alive with no tray presence for minutes, which reads as a hang.
+        # The model loads on a worker thread (_startup_load), which flips the
+        # icon from "loading" to idle and arms the hotkey once it's ready.
+        with self._state_lock:
+            self.state = self.STATE_BUSY  # block toggles until the model is ready
+        self.icon = pystray.Icon(
+            APP_NAME,
+            ICON_BUSY,
+            f"{APP_NAME} - loading {self.current_model}...",
+            self._build_menu(),
+        )
+        # Kick off the GitHub Releases poll (skipped in dev / unfrozen).
+        self._start_update_check()
+        threading.Thread(target=self._startup_load, daemon=True).start()
+        self.icon.run()
+        log(f"=== {APP_NAME} stopped ===")
+
+    def _startup_load(self) -> None:
+        """Load the model on a worker thread so the tray icon shows immediately.
+
+        On first run the model is a one-time ~1.5 GB download; loading it inline
+        in run() would leave the process alive with no tray icon for minutes,
+        which looks like a hang. We display a "loading" icon right away, load
+        here, then flip to idle and arm the hotkey once the model is ready.
+        """
+        notify_force(
+            APP_NAME,
+            f"Setting up the {self.current_model} model "
+            "(one-time ~1.5 GB download on first run)...",
+        )
         try:
             self.load_model()
         except Exception as e:
-            log(f"Model load failed: {e}\n{traceback.format_exc()}")
+            log(f"Initial model load failed: {e}\n{traceback.format_exc()}")
+            self._set_icon(ICON_BUSY, f"{APP_NAME} - model load failed (see log)")
             notify_error(APP_NAME, f"Model load failed: {e}")
             return
 
         self._start_hotkey_listener()
-
-        pretty_hotkey = self.current_hotkey.replace('<', '').replace('>', '')
-        notify(APP_NAME, f"Ready ({self.current_model}). Press {pretty_hotkey} to dictate.")
-
-        self.icon = pystray.Icon(
-            APP_NAME,
-            ICON_IDLE,
-            f"{APP_NAME} - idle ({self.current_model})",
-            self._build_menu(),
-        )
+        with self._state_lock:
+            if self.state == self.STATE_BUSY:
+                self.state = self.STATE_IDLE
+        self._set_icon(ICON_IDLE, f"{APP_NAME} - idle ({self.current_model})")
         # Reflect actual listener state in the tooltip (P5).
         self._refresh_tooltip()
-        # Kick off the GitHub Releases poll (skipped in dev / unfrozen).
-        self._start_update_check()
-        self.icon.run()
-        log(f"=== {APP_NAME} stopped ===")
+        pretty_hotkey = self.current_hotkey.replace('<', '').replace('>', '')
+        notify(APP_NAME, f"Ready ({self.current_model}). Press {pretty_hotkey} to dictate.")
 
 
 def _enable_dpi_awareness() -> None:
