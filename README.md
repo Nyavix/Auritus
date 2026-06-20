@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/auritus-cover.png" alt="Auritus — local Whisper dictation for Windows. Press a key. Talk. It types." width="100%">
+</p>
+
 # Auritus
 
 Push-to-talk Whisper dictation tray app for Windows. Press a global hotkey to
