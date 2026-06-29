@@ -8,6 +8,9 @@ focused window via Ctrl+V.
 Run with `pythonw dictate.py` to suppress the console window.
 """
 
+import sys
+IS_WINDOWS = sys.platform.startswith("win")
+
 # =====================================================================
 # CONFIG -- edit these to taste
 # =====================================================================
@@ -62,10 +65,10 @@ MAX_RECORD_SECONDS = 300
 # Auto-paste after transcription. If False, text is only put on the clipboard.
 AUTO_PASTE = True
 
-# Show Windows toast notifications. With sounds + overlay enabled you usually
-# don't want these, so they're off by default. Errors still get toasted
-# regardless of this setting (see notify_error).
-SHOW_NOTIFICATIONS = False
+# Show toast notifications for routine events. Off by default on Windows
+# (sounds + overlay are sufficient). On Linux the tkinter overlay is replaced
+# by the GTK layer-shell pill, so toasts are the backup status channel.
+SHOW_NOTIFICATIONS = not IS_WINDOWS
 
 # Play a short sound when recording starts and stops.
 PLAY_SOUNDS = True
@@ -81,8 +84,10 @@ SOUND_VOLUME = 0.35
 # Overridable at runtime via the tray Sound submenu (persisted in config.json).
 SOUND_PRESET = "default"
 
-# Show a small always-on-top mic overlay while recording / transcribing.
-SHOW_OVERLAY = True
+# Show the tkinter mic overlay while recording / transcribing.
+# Windows only: on Linux the Wayland compositor owns the screen (tkinter
+# would steal focus), so the GTK layer-shell pill is used instead.
+SHOW_OVERLAY = IS_WINDOWS
 
 # Overlay position on the primary screen: "top", "bottom", or "top-right".
 OVERLAY_POSITION = "top"
@@ -140,7 +145,6 @@ BACKEND_OPTIONS = ["auto", "gpu", "cpu"]
 # =====================================================================
 
 import os
-import sys
 import re
 import io
 import json
@@ -159,7 +163,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-IS_WINDOWS = sys.platform.startswith("win")
 if IS_WINDOWS:
     import winsound
 else:
@@ -168,11 +171,6 @@ else:
     # shells (niri, sway, KDE-on-Wayland).  The default auto-selection falls
     # back to legacy XEmbed which doesn't dock there.
     os.environ.setdefault("PYSTRAY_BACKEND", "appindicator")
-    # On Wayland a tk overlay steals keyboard focus from the target window,
-    # so wtype would type into the overlay rather than the editor.
-    # Use toast notifications instead.
-    SHOW_OVERLAY = False
-    SHOW_NOTIFICATIONS = True
 
 try:
     import gi
@@ -660,10 +658,8 @@ def _play_wav_async(path: str) -> None:
     if IS_WINDOWS:
         winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)  # type: ignore[union-attr]
     else:
-        from scipy.io import wavfile as _wf
-        import sounddevice as _sd
-        rate, data = _wf.read(path)
-        _sd.play(data, rate)
+        rate, data = wavfile.read(path)
+        sd.play(data, rate)
 
 
 def _beep_fallback(kind: str) -> None:
@@ -1136,32 +1132,36 @@ class LayerShellIndicator:
     def _build(self) -> None:
         if self._built or not _HAVE_LAYER_SHELL:
             return
-        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
-        win.set_default_size(180, 40)
-        win.set_app_paintable(True)
-        screen = win.get_screen()
-        visual = screen.get_rgba_visual()
-        if visual is not None:
-            win.set_visual(visual)
-        GtkLayerShell.init_for_window(win)
-        GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
-        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
-        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.RIGHT, True)
-        GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, 24)
-        GtkLayerShell.set_margin(win, GtkLayerShell.Edge.RIGHT, 24)
-        GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)
-        GtkLayerShell.set_exclusive_zone(win, 0)
-        label = Gtk.Label()
-        label.set_use_markup(True)
-        label.set_padding(16, 8)
-        win.add(label)
-        css = b"window { background: rgba(20,20,24,0.92); border-radius: 10px; } label { color: #f0f0f0; font-family: sans-serif; font-size: 13px; }"
-        provider = Gtk.CssProvider()
-        provider.load_from_data(css)
-        Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-        self._win = win
-        self._label = label
+        # Mark attempted early so a failed build doesn't spam on every show().
         self._built = True
+        try:
+            win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+            win.set_default_size(180, 40)
+            win.set_app_paintable(True)
+            screen = win.get_screen()
+            visual = screen.get_rgba_visual()
+            if visual is not None:
+                win.set_visual(visual)
+            GtkLayerShell.init_for_window(win)
+            GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+            GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
+            GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.RIGHT, True)
+            GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, 24)
+            GtkLayerShell.set_margin(win, GtkLayerShell.Edge.RIGHT, 24)
+            GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)
+            GtkLayerShell.set_exclusive_zone(win, 0)
+            label = Gtk.Label()
+            label.set_use_markup(True)
+            label.set_padding(16, 8)
+            win.add(label)
+            css = b"window { background: rgba(20,20,24,0.92); border-radius: 10px; } label { color: #f0f0f0; font-family: sans-serif; font-size: 13px; }"
+            provider = Gtk.CssProvider()
+            provider.load_from_data(css)
+            Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            self._win = win
+            self._label = label
+        except Exception as e:
+            log(f"LayerShell build failed (indicator disabled): {e}")
 
     def show(self, state: str) -> None:
         if _HAVE_LAYER_SHELL:
@@ -1963,6 +1963,12 @@ class DictateApp:
         ``ariasstt-toggle`` on F9; that script connects here and sends "toggle".
         Supported commands: toggle, cancel, quit, status.
         """
+        if self._socket_server is not None:
+            try:
+                self._socket_server.close()
+            except Exception:
+                pass
+            self._socket_server = None
         sock_path = self._socket_path()
         try:
             os.unlink(sock_path)
@@ -1973,6 +1979,7 @@ class DictateApp:
             srv.bind(sock_path)
             srv.listen(5)
         except Exception as e:
+            srv.close()
             self._hotkey_bound = False
             self._hotkey_last_error = str(e)
             log(f"Socket listener failed to bind {sock_path}: {e}")
@@ -1986,9 +1993,9 @@ class DictateApp:
         self._refresh_tooltip()
 
         def _serve() -> None:
+            srv.settimeout(0.5)
             while not self._stop_event.is_set():
                 try:
-                    srv.settimeout(0.5)
                     try:
                         conn, _ = srv.accept()
                     except socket.timeout:
@@ -2653,7 +2660,7 @@ class DictateApp:
                 "Open log folder",
                 lambda icon, item: (
                     os.startfile(str(LOG_PATH.parent)) if IS_WINDOWS  # type: ignore[attr-defined]
-                    else subprocess.Popen(["xdg-open", str(LOG_PATH.parent)])
+                    else subprocess.Popen(["xdg-open", str(LOG_PATH.parent)], start_new_session=True)
                 ),
             ),
             pystray.Menu.SEPARATOR,
