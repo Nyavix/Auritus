@@ -4,40 +4,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-Single-machine Windows tray app: push-to-talk Whisper dictation. Hotkey toggles
+Cross-platform tray app: push-to-talk Whisper dictation. Hotkey toggles
 recording → Whisper inference → text is pasted into the focused window.
+Runs on Windows and Linux/Wayland (niri, sway, KDE).
 
 Two inference backends coexist:
 
-- **CPU** (`faster-whisper` / CTranslate2) — always available. Default when no
-  GPU binary is present.
-- **GPU** (`whisper.cpp` Vulkan via `whisper-server.exe`) — Vulkan is
-  vendor-agnostic, so it works on AMD (target machine), NVIDIA, and Intel GPUs.
-  The `whisper-server.exe` binary is built by CI on tag and bundled into the
-  installer. Dev builds without the binary fall back to CPU automatically.
+- **CPU** (`faster-whisper` / CTranslate2) — always available.
+- **GPU** (`whisper.cpp` Vulkan via `whisper-server`) — Vulkan works on AMD,
+  NVIDIA, and Intel without vendor SDKs. Windows: bundled `.exe`. Linux: set
+  `WHISPER_CPP_SERVER=/path/to/whisper-server` or put it on PATH.
 
-"Auto" mode (default) picks GPU when `whisper-server.exe` is present and a
-Vulkan device is found; falls back to CPU otherwise.
+"Auto" mode (default) picks GPU when the binary is present, falls back to CPU.
 
 There is no test suite, no linter. CI is GitHub Actions (release pipeline only).
 
 ## Common commands
 
+### Windows
+
 All commands assume the repo root as CWD and that `setup.bat` has been run.
 
 | Task | Command |
 |---|---|
-| First-time install (creates `venv\`, installs deps, downloads `medium.en` model) | `setup.bat` |
-| Run with no console window (production) | `venv\Scripts\pythonw dictate.py` |
-| Run with console output (debugging — print/log appear in the terminal) | `venv\Scripts\python dictate.py` |
-| Register login auto-start | `install_startup.bat` |
-| Unregister login auto-start | `uninstall_startup.bat` |
-| List audio input devices (for setting `MIC_DEVICE`) | `venv\Scripts\python -m sounddevice` |
-| Tail the runtime log | `Get-Content "$env:LOCALAPPDATA\Auritus\auritus.log" -Wait` |
+| First-time install | `setup.bat` |
+| Run (no console) | `venv\Scripts\pythonw dictate.py` |
+| Run (debug) | `venv\Scripts\python dictate.py` |
+| Tail log | `Get-Content "$env:LOCALAPPDATA\Auritus\auritus.log" -Wait` |
+
+### Linux
+
+| Task | Command |
+|---|---|
+| Install deps | `pip install -r requirements-linux.txt` |
+| Run | `python dictate.py` |
+| Trigger toggle | `./ariasstt-toggle` (or bind to F9 in niri) |
+| Tail log | `tail -f ~/.local/share/Auritus/auritus.log` |
+
+**Hotkey on Linux:** the compositor owns global keybinds. Auritus listens on a
+Unix socket (`$XDG_RUNTIME_DIR/ariasstt.sock`). The `ariasstt-toggle` script
+sends "toggle" over the socket. Wire it into your compositor:
+
+```
+# ~/.config/niri/config.kdl
+binds {
+    F9 { spawn "ariasstt-toggle"; }
+}
+```
+
+Requires `socat` (`pacman -S socat`) for the toggle script.
+
+**Wayland paste:** uses `wtype` (`pacman -S wtype`) instead of Ctrl+V.
+
+**GPU on Linux:** build whisper.cpp with `-DGGML_VULKAN=ON`, then either put
+`whisper-server` on PATH or set `WHISPER_CPP_SERVER=/path/to/whisper-server`.
 
 To verify a code change manually: kill any running instance via the tray
-(right-click → Quit), launch the console version, exercise the hotkey, and
-watch the log lines stream — there is no automated harness.
+(right-click → Quit), launch with the console, exercise the hotkey/toggle
+script, and watch the log lines stream — there is no automated harness.
 
 ## Architecture
 
@@ -75,21 +99,27 @@ Two model cache locations coexist independently:
 
 ### Threading model (the part that catches you out)
 
-Three separate threads cooperate. Misplacing work between them causes deadlocks
+Several threads cooperate. Misplacing work between them causes deadlocks
 or UI freezes:
 
 1. **Main thread** — runs `pystray.Icon.run()`, which blocks. The tray menu
    callbacks fire here. Do not do long work here.
-2. **Hotkey thread** — `pynput.keyboard.GlobalHotKeys` listener. Toggle
+2. **Hotkey thread (Windows)** — `pynput.keyboard.GlobalHotKeys` listener. Toggle
    callback (`on_toggle`) runs here. It must return fast: it only flips state
    and dispatches.
-3. **Overlay thread** — `tkinter` mainloop for the always-on-top mic
+3. **Socket IPC thread (Linux)** — `_start_socket_listener()` loop. Accepts
+   connections on `$XDG_RUNTIME_DIR/ariasstt.sock` and calls `on_toggle` /
+   `on_cancel` etc. Same "return fast" rule applies.
+4. **Overlay thread (Windows)** — `tkinter` mainloop for the always-on-top mic
    indicator. tkinter is not thread-safe; the public `RecordingOverlay.show /
    hide / set_state / stop` methods marshal onto this thread via
    `root.after(0, ...)`. Don't call tkinter widgets from anywhere else.
-4. **Worker threads (ad-hoc)** — `_do_transcribe` and `_reload_model` are
+5. **Worker threads (ad-hoc)** — `_do_transcribe` and `_reload_model` are
    spawned per-invocation as daemon threads so inference / model load doesn't
    block the hotkey or the tray.
+
+On Linux, `LayerShellIndicator` marshals GTK calls via `GLib.idle_add()`; the
+pystray appindicator backend runs `Gtk.main()` so no extra GTK thread is needed.
 
 `DictateApp._state_lock` guards the `state` field (`idle | recording | busy`).
 `busy` blocks new toggles during transcription **and** during model swaps.
@@ -113,12 +143,15 @@ in `__init__` (validates against `MODEL_OPTIONS`).
 
 ### Persistence
 
-- **Runtime log:** `%LOCALAPPDATA%\Auritus\auritus.log` (append-only, written
-  by `log()`).
-- **User config:** `%LOCALAPPDATA%\Auritus\config.json`. Currently only stores
-  `{"model": "..."}`. Written by `save_user_config`, read in `__init__`. The
-  `MODEL_SIZE` constant in the config block is the *initial* value used only
-  if no config file exists.
+| Item | Windows | Linux |
+|---|---|---|
+| Runtime log | `%LOCALAPPDATA%\Auritus\auritus.log` | `~/.local/share/Auritus/auritus.log` |
+| User config | `%LOCALAPPDATA%\Auritus\config.json` | `~/.local/share/Auritus/config.json` |
+| GPU models | `%LOCALAPPDATA%\Auritus\models\` | `~/.local/share/Auritus/models/` |
+| IPC socket (Linux only) | — | `$XDG_RUNTIME_DIR/ariasstt.sock` |
+
+`MODEL_SIZE` in the config block is the *initial* value used only if no
+config file exists.
 
 ### Sound and overlay are independent of toasts
 

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Send a command to the running Auritus IPC socket.
+# Usage: ariasstt-toggle [toggle|cancel|quit|status]
+#
+# Wire this into the compositor. For niri, add to ~/.config/niri/config.kdl:
+#   binds { F9 { spawn "ariasstt-toggle"; } }
+#
+# Requires: socat (pacman -S socat)
+cmd="${1:-toggle}"
+sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ariasstt.sock"
+printf '%s' "$cmd" | socat - UNIX-CONNECT:"$sock" 2>/dev/null \
+    || printf 'Auritus: not running (socket not found at %s)\n' "$sock" >&2

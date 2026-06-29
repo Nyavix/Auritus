@@ -1,7 +1,7 @@
 """
 whisper.cpp backend.
 
-Spawns a bundled ``whisper-server.exe`` (built with ``-DGGML_VULKAN=1``)
+Spawns a ``whisper-server`` binary (built with ``-DGGML_VULKAN=1``)
 on a free localhost port, keeps it alive for the lifetime of the
 backend, and POSTs WAV-encoded audio to ``/inference`` per
 transcription.
@@ -11,10 +11,16 @@ vendor SDKs (the Vulkan loader ships with modern GPU drivers).  If the
 binary fails to start because no Vulkan device is present, ``load()``
 raises and ``DictateApp`` falls back to the CPU backend.
 
-GGUF model files (``ggml-*.bin``) are downloaded on first use to
-``%LOCALAPPDATA%\\Auritus\\models\\`` -- separate from the
-faster-whisper / HuggingFace cache used by the CPU backend.  Both
-backends can coexist and share nothing.
+GGUF model files (``ggml-*.bin``) are downloaded on first use to:
+  - Windows: ``%LOCALAPPDATA%\\Auritus\\models\\``
+  - Linux:   ``~/.local/share/Auritus/models/``
+
+Both backends can coexist and share nothing.
+
+Linux binary resolution order:
+  1. ``WHISPER_CPP_SERVER`` env var (absolute path to whisper-server)
+  2. ``whisper-server`` on PATH (``shutil.which``)
+  3. Raises RuntimeError with install instructions.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import http.client
 import io
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -68,7 +75,7 @@ SERVER_LOG_TAIL_BYTES = 16 * 1024
 # ----------------------------------------------------------------------
 
 def _vendor_dir() -> Path:
-    """Return the directory that holds whisper-server.exe and its DLLs.
+    """Return the directory that holds whisper-server.exe and its DLLs (Windows only).
 
     In the PyInstaller bundle the binaries are unpacked under
     ``sys._MEIPASS/vendor/whisper-cpp/``.  In a dev checkout they live
@@ -83,12 +90,34 @@ def _vendor_dir() -> Path:
 
 
 def _server_path() -> Path:
-    return _vendor_dir() / "whisper-server.exe"
+    """Resolve the whisper-server binary path for the current platform.
+
+    Windows: bundled ``vendor/whisper-cpp/whisper-server.exe``.
+    Linux:   ``WHISPER_CPP_SERVER`` env var, else ``whisper-server`` on PATH.
+    """
+    if sys.platform == "win32":
+        return _vendor_dir() / "whisper-server.exe"
+    # Linux / macOS
+    env_path = os.environ.get("WHISPER_CPP_SERVER")
+    if env_path:
+        return Path(env_path)
+    which = shutil.which("whisper-server")
+    if which:
+        return Path(which)
+    raise RuntimeError(
+        "whisper-server not found. Build whisper.cpp with -DGGML_VULKAN=ON, "
+        "then set WHISPER_CPP_SERVER=/path/to/build/bin/whisper-server "
+        "or add it to PATH."
+    )
 
 
 def _models_dir() -> Path:
-    appdata = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    p = Path(appdata) / "Auritus" / "models"
+    if sys.platform == "win32":
+        appdata = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        p = Path(appdata) / "Auritus" / "models"
+    else:
+        xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        p = Path(xdg) / "Auritus" / "models"
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -131,11 +160,13 @@ class WhisperCppBackend(Backend):
 
     @classmethod
     def available(cls) -> tuple[bool, str]:
-        if sys.platform != "win32":
-            return False, "Windows-only build"
-        srv = _server_path()
+        try:
+            srv = _server_path()
+        except RuntimeError as e:
+            return False, str(e)
         if not srv.exists():
-            return False, f"whisper-server.exe missing (expected at {srv})"
+            name = "whisper-server.exe" if sys.platform == "win32" else "whisper-server"
+            return False, f"{name} missing (expected at {srv})"
         return True, ""
 
     # ------------------------------------------------------------------
@@ -192,22 +223,23 @@ class WhisperCppBackend(Backend):
         self._log(f"[backend:gpu] Spawning whisper-server on :{port} with {model_name}")
 
         creationflags = 0
+        # cwd is the vendor dir on Windows so the loader finds sibling DLLs.
+        # On Linux the binary is standalone; cwd doesn't matter.
+        popen_kwargs: dict = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "stdin": subprocess.DEVNULL,
+        }
         if sys.platform == "win32":
             # CREATE_NO_WINDOW: keep the server console hidden when Auritus
             # itself runs under pythonw / a windowed PyInstaller bundle.
-            creationflags = 0x08000000  # subprocess.CREATE_NO_WINDOW
+            popen_kwargs["creationflags"] = 0x08000000
+            popen_kwargs["cwd"] = str(_vendor_dir())
 
         try:
-            self.proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                creationflags=creationflags,
-                cwd=str(_vendor_dir()),  # so the loader finds sibling DLLs
-            )
+            self.proc = subprocess.Popen(cmd, **popen_kwargs)
         except FileNotFoundError as e:
-            raise RuntimeError(f"whisper-server.exe failed to launch: {e}") from e
+            raise RuntimeError(f"whisper-server failed to launch: {e}") from e
 
         self.port = port
 

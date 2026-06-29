@@ -148,6 +148,7 @@ import math
 import time
 import queue
 import shutil
+import socket
 import struct
 import ctypes
 import tempfile
@@ -156,8 +157,32 @@ import traceback
 import subprocess
 import urllib.error
 import urllib.request
-import winsound
 from pathlib import Path
+
+IS_WINDOWS = sys.platform.startswith("win")
+if IS_WINDOWS:
+    import winsound
+else:
+    winsound = None  # type: ignore[assignment]
+    # AppIndicator (StatusNotifierItem) backend is required on modern Wayland
+    # shells (niri, sway, KDE-on-Wayland).  The default auto-selection falls
+    # back to legacy XEmbed which doesn't dock there.
+    os.environ.setdefault("PYSTRAY_BACKEND", "appindicator")
+    # On Wayland a tk overlay steals keyboard focus from the target window,
+    # so wtype would type into the overlay rather than the editor.
+    # Use toast notifications instead.
+    SHOW_OVERLAY = False
+    SHOW_NOTIFICATIONS = True
+
+try:
+    import gi
+    gi.require_version("Gtk", "3.0")
+    gi.require_version("GtkLayerShell", "0.1")
+    from gi.repository import Gtk, GtkLayerShell, GLib  # type: ignore[import]
+    _HAVE_LAYER_SHELL = True
+except Exception:
+    Gtk = GtkLayerShell = GLib = None
+    _HAVE_LAYER_SHELL = False
 
 import numpy as np
 import sounddevice as sd
@@ -181,7 +206,12 @@ from backends import Backend, FasterWhisperBackend, WhisperCppBackend
 
 APP_NAME = "Auritus"
 __version__ = "0.3.3"  # bumped in CI on tag push; user visible via update flow
-LOG_PATH = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME / "auritus.log"
+if IS_WINDOWS:
+    _DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / APP_NAME
+else:
+    _xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    _DATA_DIR = Path(_xdg) / APP_NAME
+LOG_PATH = _DATA_DIR / "auritus.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -298,7 +328,7 @@ def download_installer(url: str, dest_path: str) -> None:
 # Persisted user config (model selection)
 # ---------------------------------------------------------------------
 
-CONFIG_PATH = LOG_PATH.parent / "config.json"
+CONFIG_PATH = _DATA_DIR / "config.json"
 
 
 def load_user_config() -> dict:
@@ -625,13 +655,28 @@ _sounds_muted: bool = False
 _current_preset: str = "default"
 
 
+def _play_wav_async(path: str) -> None:
+    """Play a WAV file without blocking. Per-platform backend."""
+    if IS_WINDOWS:
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)  # type: ignore[union-attr]
+    else:
+        from scipy.io import wavfile as _wf
+        import sounddevice as _sd
+        rate, data = _wf.read(path)
+        _sd.play(data, rate)
+
+
 def _beep_fallback(kind: str) -> None:
-    """Last-resort tone via winsound.Beep. Synchronous, run on a worker thread."""
+    """Last-resort tone. Synchronous, run on a worker thread.
+    Linux: silent (synthesized WAV is the practical fallback; no further path)."""
+    if not IS_WINDOWS:
+        log(f"beep fallback unavailable on non-Windows ({kind})")
+        return
     try:
         if kind == "start":
-            winsound.Beep(660, 60); winsound.Beep(990, 90)
+            winsound.Beep(660, 60); winsound.Beep(990, 90)  # type: ignore[union-attr]
         else:
-            winsound.Beep(880, 60); winsound.Beep(587, 100)
+            winsound.Beep(880, 60); winsound.Beep(587, 100)  # type: ignore[union-attr]
     except Exception as e:
         log(f"Beep fallback failed: {e}")
 
@@ -647,20 +692,20 @@ def play_sound(kind: str) -> None:
         custom = SOUND_START if kind == "start" else SOUND_STOP
         if custom and os.path.isfile(custom):
             try:
-                winsound.PlaySound(custom, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                _play_wav_async(custom)
                 return
             except Exception as e:
-                log(f"PlaySound({custom}) failed: {e}")
+                log(f"play_wav({custom}) failed: {e}")
 
         # 2. Preset synthesized WAV
         preset_paths = _PRESET_WAV_PATHS.get(_current_preset) or _PRESET_WAV_PATHS.get("default", {})
         path = preset_paths.get(kind)
         if path and os.path.isfile(path):
             try:
-                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                _play_wav_async(path)
                 return
             except Exception as e:
-                log(f"PlaySound({path}) failed: {e}")
+                log(f"play_wav({path}) failed: {e}")
 
         # 3. Guaranteed fallback
         _beep_fallback(kind)
@@ -750,17 +795,20 @@ class RecordingOverlay:
             panel_pts = _round_rect_points(inset, inset, W - inset, H - inset, R)
 
             # --- BG window: translucent rounded fill ---------------------
-            bg = tk.Tk()
+            # className sets WM_CLASS so Wayland compositors (niri) can match
+            # window-rules against app-id="AriasSTTOverlay".
+            bg = tk.Tk(className="AuritusOverlay")
             bg.withdraw()
             bg.overrideredirect(True)
             bg.attributes("-topmost", True)
             bg.geometry(f"{W}x{H}")
             bg.resizable(False, False)
             bg.configure(bg=self.TRANSPARENT_KEY)
-            try:
-                bg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
-            except Exception as e:
-                log(f"overlay bg transparentcolor failed: {e}")
+            if IS_WINDOWS:
+                try:
+                    bg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
+                except Exception as e:
+                    log(f"overlay bg transparentcolor failed: {e}")
             try:
                 bg.attributes("-alpha", float(OVERLAY_OPACITY))
             except Exception as e:
@@ -785,10 +833,11 @@ class RecordingOverlay:
             fg.geometry(f"{W}x{H}")
             fg.resizable(False, False)
             fg.configure(bg=self.TRANSPARENT_KEY)
-            try:
-                fg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
-            except Exception as e:
-                log(f"overlay fg transparentcolor failed: {e}")
+            if IS_WINDOWS:
+                try:
+                    fg.attributes("-transparentcolor", self.TRANSPARENT_KEY)
+                except Exception as e:
+                    log(f"overlay fg transparentcolor failed: {e}")
             try:
                 fg.attributes("-alpha", 1.0)
             except Exception:
@@ -1060,6 +1109,101 @@ class RecordingOverlay:
             self._fg_canvas.coords(self._dot_id, cx - r, cy - r, cx + r, cy + r)
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------
+# Wayland layer-shell recording indicator (Linux only)
+# ---------------------------------------------------------------------
+
+class LayerShellIndicator:
+    """Tiny GTK window pinned via wlr-layer-shell so niri (or any Wayland
+    compositor with layer-shell support) can't tile or focus it. Replaces
+    the tk overlay on Linux. State updates marshal to the GTK main thread
+    via GLib.idle_add since they originate from the recorder/transcribe threads.
+    Falls back gracefully when gtk-layer-shell is not installed.
+    """
+
+    _STATES = {
+        "recording":    ("Recording",    "#e83c3c"),
+        "transcribing": ("Transcribing", "#dcb43c"),
+    }
+
+    def __init__(self) -> None:
+        self._win = None
+        self._label = None
+        self._built = False
+
+    def _build(self) -> None:
+        if self._built or not _HAVE_LAYER_SHELL:
+            return
+        win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        win.set_default_size(180, 40)
+        win.set_app_paintable(True)
+        screen = win.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual is not None:
+            win.set_visual(visual)
+        GtkLayerShell.init_for_window(win)
+        GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
+        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.RIGHT, True)
+        GtkLayerShell.set_margin(win, GtkLayerShell.Edge.TOP, 24)
+        GtkLayerShell.set_margin(win, GtkLayerShell.Edge.RIGHT, 24)
+        GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)
+        GtkLayerShell.set_exclusive_zone(win, 0)
+        label = Gtk.Label()
+        label.set_use_markup(True)
+        label.set_padding(16, 8)
+        win.add(label)
+        css = b"window { background: rgba(20,20,24,0.92); border-radius: 10px; } label { color: #f0f0f0; font-family: sans-serif; font-size: 13px; }"
+        provider = Gtk.CssProvider()
+        provider.load_from_data(css)
+        Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self._win = win
+        self._label = label
+        self._built = True
+
+    def show(self, state: str) -> None:
+        if _HAVE_LAYER_SHELL:
+            GLib.idle_add(self._show_impl, state)
+
+    def hide(self) -> None:
+        if _HAVE_LAYER_SHELL:
+            GLib.idle_add(self._hide_impl)
+
+    def stop(self) -> None:
+        if _HAVE_LAYER_SHELL:
+            GLib.idle_add(self._destroy_impl)
+
+    def _show_impl(self, state: str) -> bool:
+        try:
+            self._build()
+            if self._win is None:
+                return False
+            text, color = self._STATES.get(state, (state.title(), "#7888aa"))
+            self._label.set_markup(f'<span foreground="{color}" size="larger">●</span>  <span foreground="#f0f0f0">{text}</span>')
+            self._win.show_all()
+        except Exception as e:
+            log(f"indicator show failed: {e}")
+        return False
+
+    def _hide_impl(self) -> bool:
+        try:
+            if self._win is not None:
+                self._win.hide()
+        except Exception as e:
+            log(f"indicator hide failed: {e}")
+        return False
+
+    def _destroy_impl(self) -> bool:
+        try:
+            if self._win is not None:
+                self._win.destroy()
+                self._win = None
+                self._built = False
+        except Exception as e:
+            log(f"indicator destroy failed: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------
@@ -1441,8 +1585,26 @@ def clean_text(text: str) -> str:
 # Paste helper
 # ---------------------------------------------------------------------
 
-def paste_clipboard() -> bool:
-    """Send Ctrl+V to the focused window. Returns True on success."""
+def paste_clipboard(text: str = "") -> bool:
+    """Insert transcribed text into the focused window. Returns True on success.
+
+    Windows: synthesizes Ctrl+V to paste from clipboard.
+    Linux/Wayland: types ``text`` directly via wtype (skips clipboard race;
+    text is also on the clipboard via pyperclip.copy as a manual-paste fallback).
+    """
+    if not IS_WINDOWS:
+        if not text:
+            log("paste skipped: no text passed (Linux path needs explicit text)")
+            return False
+        try:
+            subprocess.run(["wtype", "--", text], check=True, timeout=10)
+            return True
+        except FileNotFoundError:
+            log("paste failed: wtype not installed (pacman -S wtype)")
+            return False
+        except Exception as e:
+            log(f"paste failed (wtype): {e}")
+            return False
     try:
         kb = KeyController()
         # Tiny delay so the previous Ctrl+Alt+Space release is fully processed
@@ -1473,6 +1635,7 @@ class DictateApp:
         self.backend: Backend | None = None
         self.icon: pystray.Icon | None = None
         self.overlay = RecordingOverlay(self.recorder) if SHOW_OVERLAY else None
+        self._indicator: LayerShellIndicator | None = LayerShellIndicator() if not IS_WINDOWS else None
         self._stop_event = threading.Event()
 
         cfg = load_user_config()
@@ -1522,6 +1685,8 @@ class DictateApp:
         _current_preset = self.sound_preset
 
         self._hotkey_listener = None  # keyboard.GlobalHotKeys or keyboard.Listener
+        self._socket_server: socket.socket | None = None  # Linux IPC server
+        self._socket_thread: threading.Thread | None = None
         self._hotkey_bound: bool = False
         self._hotkey_last_error: str | None = None
 
@@ -1702,6 +1867,11 @@ class DictateApp:
             except Exception as e:
                 log(f"Stop old hotkey listener failed: {e}")
             self._hotkey_listener = None
+        if not IS_WINDOWS:
+            # On Linux the compositor (e.g. niri) owns the keybind.
+            # The app exposes a Unix socket; ariasstt-toggle drives on_toggle.
+            self._start_socket_listener()
+            return
         try:
             if self.current_mode == "hold":
                 listener = self._build_hold_listener(self.current_hotkey)
@@ -1781,6 +1951,67 @@ class DictateApp:
                 return
             self.state = self.STATE_BUSY
         self._stop_and_transcribe()
+
+    def _socket_path(self) -> str:
+        runtime = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        return os.path.join(runtime, "ariasstt.sock")
+
+    def _start_socket_listener(self) -> None:
+        """Listen on a Unix domain socket for IPC commands from ariasstt-toggle.
+
+        On Linux the compositor (e.g. niri) owns the global keybind and spawns
+        ``ariasstt-toggle`` on F9; that script connects here and sends "toggle".
+        Supported commands: toggle, cancel, quit, status.
+        """
+        sock_path = self._socket_path()
+        try:
+            os.unlink(sock_path)
+        except FileNotFoundError:
+            pass
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            srv.bind(sock_path)
+            srv.listen(5)
+        except Exception as e:
+            self._hotkey_bound = False
+            self._hotkey_last_error = str(e)
+            log(f"Socket listener failed to bind {sock_path}: {e}")
+            notify_error(APP_NAME, f"Socket bind failed: {e}")
+            self._refresh_tooltip()
+            return
+        self._socket_server = srv
+        self._hotkey_bound = True
+        self._hotkey_last_error = None
+        log(f"Socket listener bound: {sock_path}")
+        self._refresh_tooltip()
+
+        def _serve() -> None:
+            while not self._stop_event.is_set():
+                try:
+                    srv.settimeout(0.5)
+                    try:
+                        conn, _ = srv.accept()
+                    except socket.timeout:
+                        continue
+                    with conn:
+                        cmd = conn.recv(64).decode("utf-8", "replace").strip()
+                        log(f"Socket command: {cmd!r}")
+                        if cmd == "toggle":
+                            self.on_toggle()
+                        elif cmd == "cancel":
+                            self.on_cancel()
+                        elif cmd == "quit":
+                            self.quit()
+                        elif cmd == "status":
+                            conn.sendall(self.state.encode("utf-8"))
+                except Exception as e:
+                    if not self._stop_event.is_set():
+                        log(f"Socket server error: {e}")
+
+        self._socket_thread = threading.Thread(
+            target=_serve, daemon=True, name="socket-ipc"
+        )
+        self._socket_thread.start()
 
     def set_mode(self, mode: str) -> None:
         """Tray callback: switch between toggle and hold modes."""
@@ -1967,6 +2198,9 @@ class DictateApp:
                     pass
 
     def _do_test_hotkey(self) -> None:
+        if not IS_WINDOWS:
+            notify_force(APP_NAME, "Hotkey test: compositor handles the keybind on Linux. Trigger via ariasstt-toggle.")
+            return
         spec = self.current_hotkey
         pretty = spec.replace("<", "").replace(">", "")
 
@@ -2121,6 +2355,8 @@ class DictateApp:
         self._set_icon(ICON_IDLE, f"{APP_NAME} - idle ({self.current_model})")
         if self.overlay is not None:
             self.overlay.hide()
+        if self._indicator is not None:
+            self._indicator.hide()
 
     def _start_recording(self) -> None:
         self._cancel_event.clear()
@@ -2138,6 +2374,8 @@ class DictateApp:
         self._set_icon(ICON_RECORDING, f"{APP_NAME} - recording")
         if self.overlay is not None:
             self.overlay.show("recording")
+        if self._indicator is not None:
+            self._indicator.show("recording")
         play_sound("start")
         log("Recording started.")
         # Dead-man's switch: force a stop after MAX_RECORD_SECONDS so a missed
@@ -2178,6 +2416,8 @@ class DictateApp:
         self._set_icon(ICON_BUSY, f"{APP_NAME} - transcribing")
         if self.overlay is not None:
             self.overlay.set_state("transcribing")
+        if self._indicator is not None:
+            self._indicator.show("transcribing")
         # Run on a worker thread so the hotkey listener stays responsive.
         threading.Thread(target=self._do_transcribe, daemon=True).start()
 
@@ -2222,7 +2462,7 @@ class DictateApp:
                 return
 
             if AUTO_PASTE:
-                ok = paste_clipboard()
+                ok = paste_clipboard(text)
                 if not ok:
                     notify_error(APP_NAME, "Paste failed; text is on the clipboard.")
             play_sound("stop")
@@ -2236,6 +2476,8 @@ class DictateApp:
             self._set_icon(ICON_IDLE, f"{APP_NAME} - idle ({self.current_model})")
             if self.overlay is not None:
                 self.overlay.hide()
+            if self._indicator is not None:
+                self._indicator.hide()
 
     def _transcribe(self, audio: np.ndarray) -> str:
         # The active backend handles dtype, VAD, and language selection
@@ -2409,7 +2651,10 @@ class DictateApp:
             pystray.MenuItem("Sound", self._sound_submenu()),
             pystray.MenuItem(
                 "Open log folder",
-                lambda icon, item: os.startfile(str(LOG_PATH.parent)),
+                lambda icon, item: (
+                    os.startfile(str(LOG_PATH.parent)) if IS_WINDOWS  # type: ignore[attr-defined]
+                    else subprocess.Popen(["xdg-open", str(LOG_PATH.parent)])
+                ),
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
@@ -2447,12 +2692,24 @@ class DictateApp:
             except Exception:
                 pass
             self._cancel_listener = None
+        if self._socket_server is not None:
+            try:
+                self._socket_server.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(self._socket_path())
+            except Exception:
+                pass
+            self._socket_server = None
         try:
             self.recorder.stop()
         except Exception:
             pass
         if self.overlay is not None:
             self.overlay.stop()
+        if self._indicator is not None:
+            self._indicator.stop()
         if self.backend is not None:
             try:
                 self.backend.unload()
