@@ -2008,11 +2008,19 @@ class DictateApp:
         def _serve() -> None:
             srv.settimeout(0.5)
             while not self._stop_event.is_set():
+                # A rebind (set_mode / set_hotkey) or quit() replaces/closes
+                # self._socket_server. When that happens, THIS generation of the
+                # loop must exit instead of spinning on a dead fd.
+                if self._socket_server is not srv:
+                    break
                 try:
                     try:
                         conn, _ = srv.accept()
                     except socket.timeout:
                         continue
+                    except OSError:
+                        # Socket closed underneath us (rebind/quit) -> exit.
+                        break
                     with conn:
                         cmd = conn.recv(64).decode("utf-8", "replace").strip()
                         log(f"Socket command: {cmd!r}")
@@ -2035,6 +2043,11 @@ class DictateApp:
 
     def set_mode(self, mode: str) -> None:
         """Tray callback: switch between toggle and hold modes."""
+        if not IS_WINDOWS:
+            # Hold mode needs a key-down/key-up listener the app doesn't own on
+            # Wayland (the compositor sends a single "toggle"). Don't pretend.
+            notify(APP_NAME, "Hold mode is Windows-only; Linux uses the compositor keybind.")
+            return
         if mode == self.current_mode:
             return
         if mode not in ("toggle", "hold"):
@@ -2667,7 +2680,7 @@ class DictateApp:
                 default=True,
                 enabled=lambda item: self.current_mode == "toggle",
             ),
-            pystray.MenuItem("Mode", self._mode_submenu()),
+            pystray.MenuItem("Mode", self._mode_submenu(), visible=lambda item: IS_WINDOWS),
             pystray.MenuItem("Model", self._model_submenu()),
             pystray.MenuItem("Backend", self._backend_submenu()),
             pystray.MenuItem("Hotkey", self._hotkey_submenu()),

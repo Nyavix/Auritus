@@ -56,3 +56,44 @@ def test_transcript_not_logged_by_default(dictate, monkeypatch, tmp_path):
     joined = "\n".join(written)
     assert secret not in joined
     assert "chars." in joined
+
+
+def test_socket_listener_old_thread_exits_on_rebind(dictate, tmp_path, monkeypatch):
+    """BUG-01: rebinding the Linux socket listener must not leave the previous
+    _serve thread spinning on a closed fd. Build a minimal app object (skip the
+    heavy __init__, which pulls GTK/audio) and exercise the real methods."""
+    import threading
+    import time
+    import socket as _socket
+
+    if not hasattr(_socket, "AF_UNIX"):
+        import pytest
+        pytest.skip("no AF_UNIX on this platform")
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    app = object.__new__(dictate.DictateApp)  # bypass __init__
+    app._socket_server = None
+    app._socket_thread = None
+    app._stop_event = threading.Event()
+    app._hotkey_bound = False
+    app._hotkey_last_error = None
+    app.state = "idle"
+    app._refresh_tooltip = lambda: None
+    app.on_toggle = lambda: None
+    app.on_cancel = lambda: None
+    app.quit = lambda: None
+
+    try:
+        app._start_socket_listener()
+        first = app._socket_thread
+        assert first is not None and first.is_alive()
+
+        app._start_socket_listener()  # rebind -> old thread must exit
+        deadline = time.time() + 3.0
+        while first.is_alive() and time.time() < deadline:
+            time.sleep(0.1)
+        assert not first.is_alive(), "old _serve thread kept running after rebind"
+    finally:
+        app._stop_event.set()
+        if app._socket_server is not None:
+            app._socket_server.close()
