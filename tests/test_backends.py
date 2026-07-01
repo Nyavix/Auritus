@@ -1,6 +1,8 @@
 """Unit tests for the pure, I/O-free parts of the inference backends.
 These need only numpy/scipy/faster-whisper on the path — no display, no audio,
 no GTK — so they run on a bare CI runner."""
+import io
+
 from backends.whisper_cpp_backend import (
     MODEL_FILE_MAP,
     WhisperCppBackend,
@@ -51,3 +53,57 @@ def test_ensure_model_file_rejects_unknown_model(tmp_path, monkeypatch):
         pass
     else:
         raise AssertionError("expected ValueError for unknown model")
+
+
+class _FakeResp:
+    """Minimal stand-in for the urlopen response context manager."""
+    def __init__(self, body: bytes, content_length):
+        self._buf = io.BytesIO(body)
+        self.headers = {"Content-Length": content_length} if content_length is not None else {}
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+    def read(self, n=-1):
+        return self._buf.read(n)
+
+
+def _install_fake_urlopen(monkeypatch, body, content_length):
+    def _fake(url, timeout=None):
+        return _FakeResp(body, content_length)
+    monkeypatch.setattr("urllib.request.urlopen", _fake)
+
+
+def test_ensure_model_file_rejects_truncated_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("backends.whisper_cpp_backend._models_dir", lambda: tmp_path)
+    _install_fake_urlopen(monkeypatch, body=b"0123456789", content_length="100")
+    backend = WhisperCppBackend(log=lambda _m: None)
+    import pytest
+    with pytest.raises(OSError):
+        backend._ensure_model_file("tiny.en")
+    fname = MODEL_FILE_MAP["tiny.en"]
+    assert not (tmp_path / fname).exists()
+    assert not (tmp_path / (fname + ".part")).exists()
+
+
+def test_ensure_model_file_accepts_complete_download(tmp_path, monkeypatch):
+    monkeypatch.setattr("backends.whisper_cpp_backend._models_dir", lambda: tmp_path)
+    body = b"x" * 64
+    _install_fake_urlopen(monkeypatch, body=body, content_length=str(len(body)))
+    backend = WhisperCppBackend(log=lambda _m: None)
+    result = backend._ensure_model_file("tiny.en")
+    assert result.read_bytes() == body
+
+
+def test_ensure_model_file_rejects_bad_digest(tmp_path, monkeypatch):
+    monkeypatch.setattr("backends.whisper_cpp_backend._models_dir", lambda: tmp_path)
+    import backends.whisper_cpp_backend as wc
+    fname = MODEL_FILE_MAP["tiny.en"]
+    monkeypatch.setitem(wc.MODEL_SHA256, fname, "0" * 64)
+    body = b"y" * 32
+    _install_fake_urlopen(monkeypatch, body=body, content_length=str(len(body)))
+    backend = WhisperCppBackend(log=lambda _m: None)
+    import pytest
+    with pytest.raises(OSError):
+        backend._ensure_model_file("tiny.en")
+    assert not (tmp_path / fname).exists()

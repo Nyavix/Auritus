@@ -25,6 +25,7 @@ Linux binary resolution order:
 
 from __future__ import annotations
 
+import hashlib
 import http.client
 import io
 import json
@@ -53,6 +54,22 @@ MODEL_FILE_MAP: dict[str, str] = {
     "small.en":  "ggml-small.en.bin",
     "medium.en": "ggml-medium.en.bin",
     "large-v3":  "ggml-large-v3.bin",
+}
+
+# Known SHA256 digests for the GGUF model files, keyed by filename. These are
+# OPTIONAL: a value of None skips digest verification for that model and the code
+# falls back to the Content-Length truncation check. Populate with the real
+# digests from the official source to get full tamper/corruption detection:
+#   https://huggingface.co/ggerganov/whisper.cpp/tree/main
+# (each file page shows its sha256), or run `sha256sum ggml-<name>.bin` on a
+# known-good local copy. Do NOT guess these values — a wrong digest rejects a
+# valid model.
+MODEL_SHA256: dict[str, "str | None"] = {
+    "ggml-tiny.en.bin":   None,
+    "ggml-base.en.bin":   None,
+    "ggml-small.en.bin":  None,
+    "ggml-medium.en.bin": None,
+    "ggml-large-v3.bin":  None,
 }
 
 HF_BASE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/"
@@ -122,6 +139,14 @@ def _models_dir() -> Path:
     return p
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _free_localhost_port() -> int:
     """Ask the OS for a free TCP port, then immediately release it.
 
@@ -178,19 +203,44 @@ class WhisperCppBackend(Backend):
         if fname is None:
             raise ValueError(f"WhisperCppBackend: unsupported model {model_name!r}")
         path = _models_dir() / fname
+        expected_hash = MODEL_SHA256.get(fname)
+
         if path.exists() and path.stat().st_size > 0:
-            return path
+            if expected_hash is None or _sha256(path) == expected_hash:
+                return path
+            # Cached file fails its known digest -> corrupt/stale; re-download.
+            self._log(f"[backend:gpu] Cached {fname} failed sha256; re-downloading.")
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
         url = HF_BASE + fname
         self._log(f"[backend:gpu] Downloading {fname} from HuggingFace ...")
         tmp = path.with_suffix(path.suffix + ".part")
         try:
             with urllib.request.urlopen(url, timeout=60) as resp, tmp.open("wb") as f:
+                clen = resp.headers.get("Content-Length")
+                expected_len = int(clen) if clen and clen.isdigit() else None
+                written = 0
                 while True:
                     chunk = resp.read(1024 * 1024)
                     if not chunk:
                         break
                     f.write(chunk)
+                    written += len(chunk)
+            # Truncation guard: a dropped connection leaves a short file.
+            if expected_len is not None and written != expected_len:
+                raise OSError(
+                    f"download truncated: got {written} of {expected_len} bytes"
+                )
+            # Integrity guard: verify a pinned digest when one is known.
+            if expected_hash is not None:
+                actual = _sha256(tmp)
+                if actual != expected_hash:
+                    raise OSError(
+                        f"sha256 mismatch for {fname}: {actual} != {expected_hash}"
+                    )
             tmp.replace(path)
         except Exception:
             try:
