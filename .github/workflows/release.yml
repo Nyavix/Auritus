@@ -125,10 +125,21 @@ jobs:
         shell: pwsh
         run: Get-ChildItem installer-output
 
+      - name: Compute installer SHA256 sidecar
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem installer-output/Auritus-Setup-v*.exe | Select-Object -First 1
+          if (-not $exe) { Write-Error "installer .exe not found"; exit 1 }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($exe.Name)" | Set-Content -NoNewline -Encoding ascii "$($exe.FullName).sha256"
+          Write-Host "sha256($($exe.Name)) = $hash"
+
       - name: Upload installer to release
         uses: softprops/action-gh-release@v2
         with:
-          files: installer-output/Auritus-Setup-v*.exe
+          files: |
+            installer-output/Auritus-Setup-v*.exe
+            installer-output/Auritus-Setup-v*.exe.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true
           token: ${{ secrets.GITHUB_TOKEN }}

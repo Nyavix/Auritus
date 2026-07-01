@@ -97,3 +97,38 @@ def test_socket_listener_old_thread_exits_on_rebind(dictate, tmp_path, monkeypat
         app._stop_event.set()
         if app._socket_server is not None:
             app._socket_server.close()
+
+
+class _FakeHttpResp:
+    def __init__(self, body, content_length):
+        import io
+        self._buf = io.BytesIO(body)
+        self.headers = {"Content-Length": content_length} if content_length is not None else {}
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def read(self, n=-1): return self._buf.read(n)
+
+
+def test_download_installer_returns_sha256(dictate, tmp_path, monkeypatch):
+    import hashlib
+    body = b"pretend installer bytes" * 100
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: _FakeHttpResp(body, str(len(body))),
+    )
+    dest = tmp_path / "Setup.exe"
+    digest = dictate.download_installer("https://example/Setup.exe", str(dest))
+    assert digest == hashlib.sha256(body).hexdigest()
+    assert dest.read_bytes() == body
+
+
+def test_download_installer_rejects_truncated(dictate, tmp_path, monkeypatch):
+    import pytest
+    body = b"short"
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None: _FakeHttpResp(body, "9999"),  # lies about length
+    )
+    dest = tmp_path / "Setup.exe"
+    with pytest.raises(OSError):
+        dictate.download_installer("https://example/Setup.exe", str(dest))

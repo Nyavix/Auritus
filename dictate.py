@@ -156,8 +156,8 @@ import json
 import math
 import time
 import queue
-import shutil
 import socket
+import hashlib
 import struct
 import ctypes
 import tempfile
@@ -299,40 +299,72 @@ def _parse_version(s: str) -> tuple[int, ...]:
     return tuple(out) if out else (0,)
 
 
-def check_for_update() -> tuple[str, str] | None:
-    """Hit GitHub Releases /latest and return (tag, installer_url) if a newer
-    version is available. Returns None on any failure (offline, 404, no
-    matching asset, already up to date)."""
+def check_for_update() -> "tuple[str, str, str | None] | None":
+    """Hit GitHub Releases /latest and return (tag, installer_url,
+    expected_sha256_or_None) if a newer version is available. Returns None on
+    any failure (offline, 404, no matching asset, already up to date)."""
     url = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
     req = urllib.request.Request(
         url,
-        headers={
-            "User-Agent": _UPDATE_USER_AGENT,
-            "Accept": "application/vnd.github+json",
-        },
+        headers={"User-Agent": _UPDATE_USER_AGENT, "Accept": "application/vnd.github+json"},
     )
     with urllib.request.urlopen(req, timeout=UPDATE_API_TIMEOUT_S) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     tag = data.get("tag_name", "")
-    latest = _parse_version(tag)
-    current = _parse_version(__version__)
-    if latest <= current:
+    if _parse_version(tag) <= _parse_version(__version__):
         return None
-    for asset in data.get("assets", []) or []:
+
+    assets = data.get("assets", []) or []
+    installer_url = None
+    for asset in assets:
         name = asset.get("name", "")
         if name.startswith("Auritus-Setup") and name.endswith(".exe"):
-            url = asset.get("browser_download_url")
-            if url:
-                return tag.lstrip("vV"), url
-    return None
+            installer_url = asset.get("browser_download_url")
+            break
+    if not installer_url:
+        return None
+
+    # Optional integrity sidecar published by CI (Auritus-Setup-*.exe.sha256).
+    expected_sha = None
+    for asset in assets:
+        name = asset.get("name", "")
+        if name.startswith("Auritus-Setup") and name.endswith(".exe.sha256"):
+            sha_url = asset.get("browser_download_url")
+            if sha_url:
+                try:
+                    sreq = urllib.request.Request(sha_url, headers={"User-Agent": _UPDATE_USER_AGENT})
+                    with urllib.request.urlopen(sreq, timeout=UPDATE_API_TIMEOUT_S) as r:
+                        # sha256sum format is "<hex>  <filename>"; take the hex.
+                        expected_sha = r.read().decode("utf-8", "replace").split()[0].strip() or None
+                except Exception as e:
+                    log(f"Update: could not fetch installer sha256 sidecar: {e}")
+            break
+
+    return tag.lstrip("vV"), installer_url, expected_sha
 
 
-def download_installer(url: str, dest_path: str) -> None:
-    """Stream an installer from `url` to `dest_path`."""
+def download_installer(url: str, dest_path: str) -> str:
+    """Stream an installer from `url` to `dest_path`; return its SHA256 hex digest.
+
+    Raises OSError if the download is truncated (bytes written != Content-Length).
+    """
     req = urllib.request.Request(url, headers={"User-Agent": _UPDATE_USER_AGENT})
+    h = hashlib.sha256()
+    written = 0
     with urllib.request.urlopen(req, timeout=UPDATE_DOWNLOAD_TIMEOUT_S) as resp, \
          open(dest_path, "wb") as f:
-        shutil.copyfileobj(resp, f, length=64 * 1024)
+        clen = resp.headers.get("Content-Length")
+        expected_len = int(clen) if clen and clen.isdigit() else None
+        while True:
+            chunk = resp.read(64 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            h.update(chunk)
+            written += len(chunk)
+    if expected_len is not None and written != expected_len:
+        raise OSError(f"installer download truncated: {written} of {expected_len} bytes")
+    return h.hexdigest()
 
 
 # ---------------------------------------------------------------------
@@ -1719,7 +1751,7 @@ class DictateApp:
 
         # Auto-update state. Populated by the background check; consumed by
         # the tray "Install update..." menu item.
-        self._pending_update: tuple[str, str] | None = None  # (version, installer_url)
+        self._pending_update: "tuple[str, str, str | None] | None" = None  # (version, url, sha256)
         self._update_in_flight: bool = False
 
     def _save_config(self) -> None:
@@ -2156,9 +2188,9 @@ class DictateApp:
         if result is None:
             log(f"Update check: up to date (current v{__version__}).")
             return
-        version, url = result
-        self._pending_update = (version, url)
-        log(f"Update available: v{version} -> {url}")
+        version, url, _sha = result
+        self._pending_update = result
+        log(f"Update available: v{version} -> {url}" + ("" if _sha else " (no sha256 sidecar)"))
         if self.icon is not None:
             try:
                 self.icon.update_menu()
@@ -2186,7 +2218,7 @@ class DictateApp:
 
     def _do_install_update(self) -> None:
         assert self._pending_update is not None
-        version, url = self._pending_update
+        version, url, expected_sha = self._pending_update
         try:
             notify_force(APP_NAME, f"Downloading update v{version}...", timeout=3)
             log(f"Downloading update v{version} from {url}")
@@ -2194,8 +2226,22 @@ class DictateApp:
             installer_path = os.path.join(
                 tmp_dir, f"Auritus-Setup-v{version}.exe",
             )
-            download_installer(url, installer_path)
-            log(f"Installer downloaded: {installer_path}")
+            actual_sha = download_installer(url, installer_path)
+            log(f"Installer downloaded: {installer_path} sha256={actual_sha}")
+
+            if expected_sha:
+                if actual_sha.lower() != expected_sha.lower():
+                    log(f"Installer sha256 MISMATCH: expected {expected_sha}, got {actual_sha}; aborting.")
+                    notify_error(APP_NAME, "Update aborted: installer failed its integrity check.")
+                    try:
+                        os.remove(installer_path)
+                    except OSError:
+                        pass
+                    return
+                log("Installer sha256 verified against release sidecar.")
+            else:
+                log("No sha256 sidecar published for this release; proceeding (hash logged above).")
+
             notify_force(
                 APP_NAME,
                 f"Installing v{version}. App will restart.",
