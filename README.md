@@ -105,6 +105,7 @@ All knobs live at the top of `dictate.py`:
 | `AUTO_PASTE` | `True` | Set `False` to only copy to clipboard |
 | `SHOW_NOTIFICATIONS` | `False` | Routine Windows toasts. Errors always toast regardless. |
 | `PLAY_SOUNDS` | `True` | Short start/stop tone played via `winsound`. |
+| `DEBUG_LOG_TEXT` | `False` | Write the full transcript into `auritus.log`. Off by default — dictation can contain secrets. Turn on only to debug bad output. |
 | `SOUND_START` / `SOUND_STOP` | `None` | Optional path to a custom `.wav`. `None` uses the built-in synthesized tones. |
 | `SOUND_VOLUME` | `0.35` | Volume of the built-in tones (0.0–1.0). |
 | `SOUND_PRESET` | `"default"` | Initial tone style: `"default"` (two-note ding), `"subtle"` (single soft note), `"click"` (short click). Changeable at runtime via tray → Sound. |

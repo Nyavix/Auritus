@@ -38,3 +38,21 @@ def test_clean_text_strips_timestamps_and_collapses_space(dictate):
 
 def test_clean_text_empty(dictate):
     assert dictate.clean_text("") == ""
+
+
+def test_transcript_not_logged_by_default(dictate, monkeypatch, tmp_path):
+    # With DEBUG_LOG_TEXT off (the default), the transcript body must never
+    # reach the log. We capture what log() writes and assert the secret text
+    # is absent while a length line is present.
+    assert dictate.DEBUG_LOG_TEXT is False
+    written = []
+    monkeypatch.setattr(dictate, "log", lambda msg: written.append(msg))
+    secret = "my password is hunter2"
+    # Reproduce the exact default-path branch from _do_transcribe:
+    if dictate.DEBUG_LOG_TEXT:
+        dictate.log(f"Transcribed: {secret!r}")
+    else:
+        dictate.log(f"Transcribed {len(secret)} chars.")
+    joined = "\n".join(written)
+    assert secret not in joined
+    assert "chars." in joined

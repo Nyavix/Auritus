@@ -73,6 +73,11 @@ SHOW_NOTIFICATIONS = not IS_WINDOWS
 # Play a short sound when recording starts and stops.
 PLAY_SOUNDS = True
 
+# Write the full transcribed text into auritus.log. OFF by default: dictation
+# can contain passwords, 2FA codes, and other secrets, and the log is a
+# long-lived plaintext file. Turn on only for local debugging of bad output.
+DEBUG_LOG_TEXT = False
+
 # Optional custom .wav file paths. Leave None to use built-in synthesized tones.
 SOUND_START = None  # e.g. r"C:\path\to\start.wav"
 SOUND_STOP = None   # e.g. r"C:\path\to\stop.wav"
@@ -211,6 +216,14 @@ else:
     _DATA_DIR = Path(_xdg) / APP_NAME
 LOG_PATH = _DATA_DIR / "auritus.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# Best-effort: keep the log user-readable only (it may contain diagnostic text).
+if not IS_WINDOWS:
+    try:
+        LOG_PATH.touch(exist_ok=True)
+        os.chmod(LOG_PATH, 0o600)
+    except Exception:
+        pass
 
 
 def log(msg: str) -> None:
@@ -2460,7 +2473,10 @@ class DictateApp:
                 log("Empty transcription.")
                 return
 
-            log(f"Transcribed: {text!r}")
+            if DEBUG_LOG_TEXT:
+                log(f"Transcribed: {text!r}")
+            else:
+                log(f"Transcribed {len(text)} chars.")
 
             try:
                 pyperclip.copy(text)
